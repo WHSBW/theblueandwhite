@@ -40,9 +40,9 @@
 
     /* CMS SHELL */
     #cms-screen{display:none;min-height:100vh;}
-    .cms{display:grid;grid-template-columns:220px 1fr;min-height:100vh;}
+    .cms{display:flex;min-height:100vh;}
     .cms-nav{background:var(--navy);display:flex;flex-direction:column;position:fixed;width:220px;height:100vh;overflow-y:auto;}
-    .cms-main{margin-left:220px;display:flex;flex-direction:column;min-height:100vh;}
+    .cms-main{margin-left:220px;display:flex;flex-direction:column;min-height:100vh;flex:1;width:calc(100vw - 220px);}
     .nav-logo{padding:18px 18px 14px;border-bottom:1px solid var(--navy-light);}
     .nav-logo a{text-decoration:none;}
     .nav-title{font-family:'Playfair Display',serif;font-size:15px;font-weight:700;color:var(--white);}
