@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Contact The Blue &amp; White student newspaper at Paul R. Wharton High School.">
+  <title>Contact | The Blue &amp; White</title>
+  <link rel="stylesheet" href="assets/css/style.css">
+  <style>
+    .contact-layout{display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid var(--light-gray);}
+    .contact-left{padding:40px 40px 40px 32px;border-right:1px solid var(--light-gray);}
+    .contact-right{padding:40px 32px 40px 40px;}
+    .contact-eyebrow{font-size:11px;font-weight:500;color:var(--silver);letter-spacing:0.16em;text-transform:uppercase;margin-bottom:12px;}
+    .contact-title{font-family:'Playfair Display',serif;font-size:36px;font-weight:700;color:var(--navy);line-height:1.1;margin-bottom:16px;}
+    .contact-desc{font-family:'Source Serif 4',serif;font-size:15px;font-weight:300;color:var(--text-mid);line-height:1.6;margin-bottom:32px;}
+    .contact-item{margin-bottom:24px;}
+    .contact-item-label{font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px;}
+    .contact-item-value{font-size:14px;color:var(--text-mid);}
+    .contact-item-value a{color:var(--news);border-bottom:1px solid transparent;transition:border-color 0.15s;}
+    .contact-item-value a:hover{border-bottom-color:var(--news);}
+    .form-group{margin-bottom:16px;}
+    .form-label{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dark);display:block;margin-bottom:5px;}
+    .form-input{font-family:'DM Sans',sans-serif;font-size:13px;padding:9px 12px;border:1px solid var(--light-gray);border-radius:2px;background:var(--white);color:var(--text-dark);width:100%;transition:border 0.15s;}
+    .form-input:focus{outline:none;border-color:var(--navy);}
+    textarea.form-input{min-height:140px;resize:vertical;}
+    .form-btn{font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;padding:10px 24px;background:var(--navy);color:var(--white);border:none;border-radius:2px;cursor:pointer;transition:background 0.15s;margin-top:4px;}
+    .form-btn:hover{background:var(--navy-light);}
+    .form-note{font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.5;}
+    .form-success{display:none;background:var(--silver-pale);border-left:3px solid var(--navy);padding:14px 16px;font-size:13px;color:var(--text-mid);margin-top:12px;border-radius:0 2px 2px 0;}
+    @media(max-width:768px){.contact-layout{grid-template-columns:1fr;}.contact-left{border-right:none;border-bottom:1px solid var(--light-gray);padding:32px 24px;}.contact-right{padding:32px 24px;}}
+  </style>
+</head>
+<body>
+<div class="site">
+
+  <header class="masthead">
+    <div class="masthead-top">
+      <span class="masthead-meta">Paul R. Wharton High School &nbsp;·&nbsp; Tampa, FL &nbsp;·&nbsp; Est. 1997</span>
+      <div class="masthead-actions">
+        <a href="about.html">About</a>
+        <a href="staff.html">Staff</a>
+        <a href="contact.html">Contact</a>
+      </div>
+    </div>
+    <div class="masthead-center">
+      <div class="site-title"><a href="index.html">The Blue &amp; White</a></div>
+      <div class="site-tagline">The Student Voice of Paul R. Wharton High School</div>
+    </div>
+    <nav>
+      <div class="nav-inner">
+        <a href="articles/news/">News</a>
+        <a href="articles/sports/">Sports</a>
+        <a href="articles/culture/">Culture</a>
+        <a href="articles/hot-spot/">Hot Spot</a>
+        <a href="articles/we-are-wharton/">We Are Wharton</a>
+        <a href="articles/editorial/">Editorial</a>
+        <a href="articles/wharton-brief/">Wharton Brief</a>
+      </div>
+    </nav>
+  </header>
+
+  <div class="contact-layout">
+    <div class="contact-left">
+      <div class="contact-eyebrow">Get in Touch</div>
+      <h1 class="contact-title">Contact the Newsroom</h1>
+      <p class="contact-desc">Have a tip, a story idea, a correction request, or a question? We want to hear from you.</p>
+
+      <div class="contact-item">
+        <div class="contact-item-label">General inquiries</div>
+        <!-- Replace with your actual email address -->
+        <div class="contact-item-value"><a href="mailto:blueandwhite@whartonhs.edu">blueandwhite@whartonhs.edu</a></div>
+      </div>
+
+      <div class="contact-item">
+        <div class="contact-item-label">Faculty Adviser</div>
+        <div class="contact-item-value">Ms. Novello &nbsp;·&nbsp; Paul R. Wharton High School</div>
+      </div>
+
+      <div class="contact-item">
+        <div class="contact-item-label">Follow us</div>
+        <div class="contact-item-value">
+          <!-- Replace with real Instagram and YouTube links -->
+          <a href="https://instagram.com" target="_blank" rel="noopener">Instagram</a>
+          &nbsp;&nbsp;·&nbsp;&nbsp;
+          <a href="https://youtube.com" target="_blank" rel="noopener">YouTube</a>
+        </div>
+      </div>
+
+      <div class="contact-item">
+        <div class="contact-item-label">Corrections</div>
+        <div class="contact-item-value">We are committed to accuracy. If you believe we made an error, please let us know using the form and we will address it promptly.</div>
+      </div>
+
+      <div class="contact-item">
+        <div class="contact-item-label">Join the staff</div>
+        <div class="contact-item-value">The Blue &amp; White is open to all Wharton students enrolled in Journalism. See Ms. Novello for information about joining the program.</div>
+      </div>
+    </div>
+
+    <div class="contact-right">
+      <div class="contact-eyebrow">Send a Message</div>
+      <h2 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:600;color:var(--navy);margin-bottom:20px;">Got a tip or story idea?</h2>
+
+      <form onsubmit="handleSubmit(event)">
+        <div class="form-group">
+          <label class="form-label">Your Name</label>
+          <input class="form-input" type="text" placeholder="First and last name" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email Address</label>
+          <input class="form-input" type="email" placeholder="your@email.com" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Subject</label>
+          <select class="form-input">
+            <option value="">— Select one —</option>
+            <option>Story tip or idea</option>
+            <option>Correction request</option>
+            <option>General question</option>
+            <option>Letter to the editor</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Message</label>
+          <textarea class="form-input" placeholder="Tell us what's on your mind. Story tips can be submitted anonymously — just leave your name blank." required></textarea>
+        </div>
+        <button type="submit" class="form-btn">Send Message</button>
+        <div class="form-note">We read every message. Response times vary — tips and corrections are prioritized.</div>
+        <div class="form-success" id="form-success">
+          &#10003; &nbsp; Thank you — your message has been received. We'll be in touch if we have follow-up questions.
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <footer>
+    <div>
+      <div class="ft-title">The Blue &amp; White</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:4px;">Paul R. Wharton High School &nbsp;·&nbsp; Tampa, FL &nbsp;·&nbsp; Est. 1997</div>
+    </div>
+    <div class="ft-links">
+      <a href="about.html">About</a>
+      <a href="staff.html">Staff</a>
+      <a href="ethics.html">Ethics Policy</a>
+      <a href="contact.html">Contact</a>
+      <a href="https://instagram.com" target="_blank" rel="noopener">Instagram</a>
+      <a href="https://youtube.com" target="_blank" rel="noopener">YouTube</a>
+    </div>
+    <div class="ft-copy">&copy; 2025 The Blue &amp; White</div>
+  </footer>
+
+</div>
+<script src="assets/js/nav.js"></script>
+<script>
+function handleSubmit(e) {
+  e.preventDefault();
+  document.getElementById('form-success').style.display = 'block';
+  e.target.querySelector('button').textContent = 'Sent';
+  e.target.querySelector('button').disabled = true;
+  // TODO: wire to a real form backend (Formspree, Netlify Forms, etc.)
+}
+</script>
+</body>
+</html>
