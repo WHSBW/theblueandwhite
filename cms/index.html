@@ -474,11 +474,10 @@ const SUPABASE_URL = 'https://cybjclqcdmrjhoaoiund.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_G-U4_7cECYwC3c1Sa2MqWQ_9NHN-7_g';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ── GITHUB CONFIG ─────────────────────────────────────────────────────────────
-// Replace ghp_OmFZcX85hjYecYOrIvAqmQvhSMkTHB1LwQry(repo scope).
-// Get one at: github.com → Settings → Developer settings → Personal access tokens → Tokens (classic)
-const GITHUB_TOKEN = 'ghp_OmFZcX85hjYecYOrIvAqmQvhSMkTHB1LwQry';
-const GITHUB_REPO  = 'WHSBW/theblueandwhite';   // owner/repo
+// ── PUBLISHER CONFIG ──────────────────────────────────────────────────────────
+// The token lives in Cloudflare — never in this file.
+// After deploying your worker, paste its URL below.
+const PUBLISHER_URL = 'https://morning-field-8e58.lauranovello0214.workers.dev/';
 
 let currentUser = null;
 let currentArticleId = null;
@@ -629,44 +628,26 @@ function generateArticleHTML(article) {
 </html>`;
 }
 
-async function pushToGitHub(path, content, commitMsg, existingSha = null) {
-  const body = { message: commitMsg, content: btoa(unescape(encodeURIComponent(content))) };
-  if (existingSha) body.sha = existingSha;
-  const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${path}`, {
-    method: 'PUT',
-    headers: {
-      'Authorization': `token ${GITHUB_TOKEN}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body)
+async function pushToGitHub(path, content, headline) {
+  const res = await fetch(PUBLISHER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'publish', path, content, headline })
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.message || `GitHub API error ${res.status}`);
-  }
-  return res.json();
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Publisher error ${res.status}`);
+  return data;
 }
 
-async function deleteFromGitHub(path, commitMsg) {
-  // First get the current SHA (required to delete)
-  const getRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${path}`, {
-    headers: { 'Authorization': `token ${GITHUB_TOKEN}` }
+async function deleteFromGitHub(path, headline) {
+  const res = await fetch(PUBLISHER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'delete', path, headline })
   });
-  if (!getRes.ok) throw new Error('File not found on GitHub');
-  const { sha } = await getRes.json();
-  const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${path}`, {
-    method: 'DELETE',
-    headers: {
-      'Authorization': `token ${GITHUB_TOKEN}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ message: commitMsg, sha })
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.message || `GitHub API error ${res.status}`);
-  }
-  return res.json();
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Publisher error ${res.status}`);
+  return data;
 }
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
@@ -1021,7 +1002,7 @@ async function publishArticle() {
   const html   = generateArticleHTML(merged);
 
   try {
-    await pushToGitHub(path, html, `Publish: ${hed}`);
+    await pushToGitHub(path, html, hed);
     await sb.from('articles').update({
       headline: hed, dek: dek, body: body,
       status: 'published',
@@ -1065,7 +1046,7 @@ async function archiveArticle(id, headline, githubPath) {
   if (!confirm(`Archive "${headline}"? This will remove it from the live site.`)) return;
   try {
     if (githubPath) {
-      await deleteFromGitHub(githubPath, `Archive: ${headline}`);
+      await deleteFromGitHub(githubPath, headline);
     }
     await sb.from('articles').update({ status: 'archived' }).eq('id', id);
     showToast('articles-toast', `"${headline}" archived and removed from site.`, 'success');
@@ -1083,7 +1064,7 @@ async function republishArticle(id) {
   const path   = `articles/${folder}/${slug}.html`;
   const html   = generateArticleHTML(article);
   try {
-    await pushToGitHub(path, html, `Republish: ${article.headline}`);
+    await pushToGitHub(path, html, article.headline);
     await sb.from('articles').update({
       status: 'published',
       published_at: new Date().toISOString(),
