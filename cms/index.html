@@ -443,6 +443,27 @@
           <button class="btn btn-primary" onclick="createAssignment()">Create Assignment</button>
         </div>
 
+        <!-- PASSWORD CHANGE (all roles) -->
+        <div id="view-passwd" class="view">
+          <div class="toast toast-success" id="passwd-toast"></div>
+          <div style="max-width:420px;">
+            <div class="section-div" style="margin-bottom:20px;">Change Password</div>
+            <div class="form-group" style="margin-bottom:14px;">
+              <label class="form-label">Current Password</label>
+              <input class="form-input" id="pw-current" type="password" placeholder="Your current password" autocomplete="current-password">
+            </div>
+            <div class="form-group" style="margin-bottom:14px;">
+              <label class="form-label">New Password</label>
+              <input class="form-input" id="pw-new" type="password" placeholder="Choose a new password" autocomplete="new-password">
+            </div>
+            <div class="form-group" style="margin-bottom:20px;">
+              <label class="form-label">Confirm New Password</label>
+              <input class="form-input" id="pw-confirm" type="password" placeholder="Repeat new password" autocomplete="new-password">
+            </div>
+            <button class="btn btn-primary" onclick="changePassword()">Update Password</button>
+          </div>
+        </div>
+
       </div><!-- end cms-body -->
     </div><!-- end cms-main -->
   </div>
@@ -452,6 +473,12 @@
 const SUPABASE_URL = 'https://cybjclqcdmrjhoaoiund.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_G-U4_7cECYwC3c1Sa2MqWQ_9NHN-7_g';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── GITHUB CONFIG ─────────────────────────────────────────────────────────────
+// Replace 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 with your GitHub PAT (repo scope).
+// Get one at: github.com → Settings → Developer settings → Personal access tokens → Tokens (classic)
+const GITHUB_TOKEN = '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';
+const GITHUB_REPO  = 'WHSBW/theblueandwhite';   // owner/repo
 
 let currentUser = null;
 let currentArticleId = null;
@@ -463,6 +490,184 @@ const sectionColors = {
   News:'var(--news)',Sports:'var(--sports)',Culture:'var(--culture)',
   'Hot Spot':'var(--hotspot)','We Are Wharton':'var(--wharton)',Editorial:'var(--editorial)'
 };
+
+// ── GITHUB HELPERS ────────────────────────────────────────────────────────────
+
+const SECTION_FOLDER = {
+  'News':'news', 'Sports':'sports', 'Culture':'culture',
+  'Hot Spot':'hot-spot', 'We Are Wharton':'we-are-wharton', 'Editorial':'editorial'
+};
+const SECTION_STYLE = {
+  'News':          'background:#EEF4FF;color:var(--news)',
+  'Sports':        'background:#FFF3E8;color:var(--sports)',
+  'Culture':       'background:#F5EEF8;color:var(--culture)',
+  'Hot Spot':      'background:#FFF3E8;color:var(--hotspot)',
+  'We Are Wharton':'background:#EEF4FF;color:var(--wharton)',
+  'Editorial':     'background:#EEEAF8;color:var(--editorial)'
+};
+
+function makeSlug(headline) {
+  return headline.toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim().replace(/\s+/g, '-')
+    .replace(/-+/g, '-').slice(0, 80);
+}
+
+function generateArticleHTML(article) {
+  const folder   = SECTION_FOLDER[article.section] || 'news';
+  const style    = SECTION_STYLE[article.section]  || SECTION_STYLE['News'];
+  const initials = (article.author_name || 'BY')
+                    .split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2);
+  const pubDate  = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+  // Depth from articles/{section}/ back to root is ../../
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="${(article.dek||'').replace(/"/g,'&quot;')}">
+  <title>${(article.headline||'Article').replace(/</g,'&lt;')} | The Blue &amp; White</title>
+  <link rel="stylesheet" href="../../assets/css/style.css">
+</head>
+<body>
+<div class="site">
+
+  <header class="masthead">
+    <div class="masthead-top">
+      <span class="masthead-meta">Paul R. Wharton High School &nbsp;&middot;&nbsp; Tampa, FL &nbsp;&middot;&nbsp; Est. 1997</span>
+      <div class="masthead-actions">
+        <a href="../../about.html">About</a>
+        <a href="../../staff.html">Staff</a>
+        <a href="../../contact.html">Contact</a>
+      </div>
+    </div>
+    <div class="masthead-center">
+      <div class="site-title"><a href="../../index.html">The Blue &amp; White</a></div>
+      <div class="site-tagline">The Student Voice of Paul R. Wharton High School</div>
+    </div>
+    <nav>
+      <div class="nav-inner">
+        <a href="../../articles/news/">News</a>
+        <a href="../../articles/sports/">Sports</a>
+        <a href="../../articles/culture/">Culture</a>
+        <a href="../../articles/hot-spot/">Hot Spot</a>
+        <a href="../../articles/we-are-wharton/">We Are Wharton</a>
+        <a href="../../articles/editorial/">Editorial</a>
+        <a href="../../articles/wharton-brief/">Wharton Brief</a>
+      </div>
+    </nav>
+  </header>
+
+  <div class="breadcrumb">
+    <a href="../../index.html">Home</a>
+    <span class="breadcrumb-sep">&rsaquo;</span>
+    <a href="../../articles/${folder}/">${article.section}</a>
+    <span class="breadcrumb-sep">&rsaquo;</span>
+    <span style="color:var(--text-dark);">${(article.headline||'').replace(/</g,'&lt;')}</span>
+  </div>
+
+  <div class="article-layout">
+    <div class="article-main">
+      <span class="article-section-label" style="${style}">${article.section}</span>
+      <h1 class="article-headline">${(article.headline||'').replace(/</g,'&lt;')}</h1>
+      <p class="article-dek">${(article.dek||'').replace(/</g,'&lt;')}</p>
+      <div class="article-meta">
+        <div class="author-avatar">${initials}</div>
+        <div class="author-info">
+          <div class="author-name">${article.author_name||'Staff Writer'}</div>
+          <div class="author-role">${article.section} Reporter</div>
+        </div>
+        <div class="article-date">${pubDate}</div>
+      </div>
+      <div class="article-body">
+        ${article.body||''}
+      </div>
+    </div>
+
+    <aside class="sidebar">
+      <div class="sidebar-block">
+        <div class="sidebar-header">Wharton Brief</div>
+        <div class="sidebar-story">
+          <div class="sidebar-thumb" style="background:var(--navy);display:flex;align-items:center;justify-content:center;">
+            <div style="width:26px;height:26px;background:rgba(255,255,255,0.12);border:1.5px solid rgba(255,255,255,0.5);border-radius:50%;display:flex;align-items:center;justify-content:center;">
+              <div style="width:0;height:0;border-style:solid;border-width:5px 0 5px 9px;border-color:transparent transparent transparent rgba(255,255,255,0.85);margin-left:2px;"></div>
+            </div>
+          </div>
+          <span class="sidebar-story-label" style="color:var(--videos);">Latest Episode</span>
+          <a href="../../articles/wharton-brief/"><div class="sidebar-story-hed">Watch the latest Wharton Brief</div></a>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="more-stories">
+    <div class="more-header">More Stories</div>
+    <div class="more-grid">
+      <div class="more-card"><div class="more-thumb"></div><span class="more-label label-news">News</span><a href="#"><div class="more-hed">Related story one headline</div></a><div class="more-byline">Reporter Name &nbsp;&middot;&nbsp; Date</div></div>
+      <div class="more-card"><div class="more-thumb"></div><span class="more-label label-sports">Sports</span><a href="#"><div class="more-hed">Related story two headline</div></a><div class="more-byline">Reporter Name &nbsp;&middot;&nbsp; Date</div></div>
+      <div class="more-card"><div class="more-thumb"></div><span class="more-label label-culture">Culture</span><a href="#"><div class="more-hed">Related story three headline</div></a><div class="more-byline">Reporter Name &nbsp;&middot;&nbsp; Date</div></div>
+    </div>
+  </div>
+
+  <footer>
+    <div>
+      <div class="ft-title">The Blue &amp; White</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:4px;">Paul R. Wharton High School &nbsp;&middot;&nbsp; Tampa, FL &nbsp;&middot;&nbsp; Est. 1997</div>
+    </div>
+    <div class="ft-links">
+      <a href="../../about.html">About</a>
+      <a href="../../staff.html">Staff</a>
+      <a href="../../ethics.html">Ethics Policy</a>
+      <a href="../../contact.html">Contact</a>
+    </div>
+    <div class="ft-copy">&copy; ${new Date().getFullYear()} The Blue &amp; White</div>
+  </footer>
+
+</div>
+<script src="../../assets/js/nav.js"></script>
+</body>
+</html>`;
+}
+
+async function pushToGitHub(path, content, commitMsg, existingSha = null) {
+  const body = { message: commitMsg, content: btoa(unescape(encodeURIComponent(content))) };
+  if (existingSha) body.sha = existingSha;
+  const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${path}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `token ${GITHUB_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.message || `GitHub API error ${res.status}`);
+  }
+  return res.json();
+}
+
+async function deleteFromGitHub(path, commitMsg) {
+  // First get the current SHA (required to delete)
+  const getRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${path}`, {
+    headers: { 'Authorization': `token ${GITHUB_TOKEN}` }
+  });
+  if (!getRes.ok) throw new Error('File not found on GitHub');
+  const { sha } = await getRes.json();
+  const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${path}`, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `token ${GITHUB_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ message: commitMsg, sha })
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.message || `GitHub API error ${res.status}`);
+  }
+  return res.json();
+}
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 
@@ -518,6 +723,7 @@ const NAV_CONFIG = {
   reporter: [
     {id:'rdash', label:'Dashboard', icon:'▪'},
     {id:'write', label:'Write Article', icon:'+'},
+    {id:'passwd', label:'Change Password', icon:'🔑'},
   ],
   editor: [
     {id:'edash', label:'Dashboard', icon:'▪', badge:true},
@@ -525,6 +731,7 @@ const NAV_CONFIG = {
     {id:'articles', label:'All Articles', icon:'≡'},
     {id:'analytics', label:'Writing Analytics', icon:'◎'},
     {id:'assignments', label:'Deadlines', icon:'◷'},
+    {id:'passwd', label:'Change Password', icon:'🔑'},
   ],
   adviser: [
     {id:'edash', label:'Dashboard', icon:'▪', badge:true},
@@ -533,6 +740,7 @@ const NAV_CONFIG = {
     {id:'analytics', label:'Writing Analytics', icon:'◎'},
     {id:'assignments', label:'Assignments', icon:'◷'},
     {id:'staff', label:'Staff Manager', icon:'◈'},
+    {id:'passwd', label:'Change Password', icon:'🔑'},
   ]
 };
 
@@ -559,7 +767,8 @@ function buildUserPanel(user) {
 const VIEW_TITLES = {
   rdash:'My Dashboard', write:'Write Article', edash:'Dashboard',
   review:'Review Article', articles:'All Articles', analytics:'Writing Analytics',
-  staff:'Staff Manager', assignments:'Assignments & Deadlines'
+  staff:'Staff Manager', assignments:'Assignments & Deadlines',
+  passwd:'Change Password'
 };
 
 function showView(id) {
@@ -794,16 +1003,39 @@ async function openReview(id) {
 
 async function publishArticle() {
   if (!currentArticleId) return;
-  const hed = document.getElementById('rv-hed').value.trim();
-  const dek = document.getElementById('rv-dek').value.trim();
+  const btn = document.querySelector('[onclick="publishArticle()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Publishing…'; }
+
+  const hed  = document.getElementById('rv-hed').value.trim();
+  const dek  = document.getElementById('rv-dek').value.trim();
   const body = document.getElementById('rv-body').innerHTML;
-  await sb.from('articles').update({
-    headline: hed, dek: dek, body: body,
-    status: 'published', published_at: new Date().toISOString()
-  }).eq('id', currentArticleId);
-  showToast('review-toast', `Published! "${hed}" is now live on the site.`, 'success');
-  loadEditorDash();
-  setTimeout(() => showView('edash'), 2500);
+
+  // Pull full article record so we have author_name, section, etc.
+  const { data: article } = await sb.from('articles').select('*').eq('id', currentArticleId).single();
+  if (!article) { showToast('review-toast', 'Could not load article data.', 'error'); if (btn) { btn.disabled=false; btn.textContent='Publish to Site'; } return; }
+
+  const merged = { ...article, headline: hed, dek: dek, body: body };
+  const slug   = makeSlug(hed);
+  const folder = SECTION_FOLDER[merged.section] || 'news';
+  const path   = `articles/${folder}/${slug}.html`;
+  const html   = generateArticleHTML(merged);
+
+  try {
+    await pushToGitHub(path, html, `Publish: ${hed}`);
+    await sb.from('articles').update({
+      headline: hed, dek: dek, body: body,
+      status: 'published',
+      published_at: new Date().toISOString(),
+      github_path: path
+    }).eq('id', currentArticleId);
+    showToast('review-toast',
+      `✓ Published! "${hed}" is live at blueandwhitewhs.com/${path}`, 'success');
+    loadEditorDash();
+    setTimeout(() => showView('edash'), 3000);
+  } catch (err) {
+    showToast('review-toast', `GitHub error: ${err.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Publish to Site'; }
+  }
 }
 
 async function returnArticle() {
@@ -829,23 +1061,74 @@ function addReviewNote() {
   document.getElementById('rv-note-input').value = '';
 }
 
+async function archiveArticle(id, headline, githubPath) {
+  if (!confirm(`Archive "${headline}"? This will remove it from the live site.`)) return;
+  try {
+    if (githubPath) {
+      await deleteFromGitHub(githubPath, `Archive: ${headline}`);
+    }
+    await sb.from('articles').update({ status: 'archived' }).eq('id', id);
+    showToast('articles-toast', `"${headline}" archived and removed from site.`, 'success');
+    loadAllArticles();
+  } catch (err) {
+    showToast('articles-toast', `Error archiving: ${err.message}`, 'error');
+  }
+}
+
+async function republishArticle(id) {
+  const { data: article } = await sb.from('articles').select('*').eq('id', id).single();
+  if (!article) return;
+  const slug   = makeSlug(article.headline);
+  const folder = SECTION_FOLDER[article.section] || 'news';
+  const path   = `articles/${folder}/${slug}.html`;
+  const html   = generateArticleHTML(article);
+  try {
+    await pushToGitHub(path, html, `Republish: ${article.headline}`);
+    await sb.from('articles').update({
+      status: 'published',
+      published_at: new Date().toISOString(),
+      github_path: path
+    }).eq('id', id);
+    showToast('articles-toast', `"${article.headline}" is live again.`, 'success');
+    loadAllArticles();
+  } catch (err) {
+    showToast('articles-toast', `GitHub error: ${err.message}`, 'error');
+  }
+}
+
 // ── ALL ARTICLES ──────────────────────────────────────────────────────────────
 
 async function loadAllArticles() {
   const { data } = await sb.from('articles').select('*').order('created_at', {ascending:false});
   const list = document.getElementById('all-articles-list');
   if (!data || data.length === 0) { list.innerHTML = '<div class="empty">No articles yet.</div>'; return; }
-  list.innerHTML = `<div class="section-div">All Articles (${data.length})</div>` + data.map(a => `
-    <div class="queue-item">
-      <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
-      <div class="q-info">
-        <div class="q-hed">${a.headline || 'Untitled draft'}</div>
-        <div class="q-meta">${a.author_name} · ${a.section||'—'} · ${formatDate(a.created_at)}</div>
-      </div>
-      <span class="status-pill s-${a.status}">${a.status}</span>
-      ${(currentUser.role==='editor'||currentUser.role==='adviser') && a.status==='pending'
-        ? `<button class="btn btn-sm" onclick="openReview('${a.id}')">Review</button>` : ''}
-    </div>`).join('');
+  const isEditor = currentUser.role === 'editor' || currentUser.role === 'adviser';
+  list.innerHTML = `<div class="toast toast-success" id="articles-toast"></div>
+    <div class="section-div">All Articles (${data.length})</div>` +
+    data.map(a => {
+      let actionBtn = '';
+      if (isEditor) {
+        if (a.status === 'pending') {
+          actionBtn = `<button class="btn btn-sm" onclick="openReview('${a.id}')">Review</button>`;
+        } else if (a.status === 'published') {
+          const safeHed  = (a.headline||'').replace(/'/g,"\\'");
+          const safePath = (a.github_path||'').replace(/'/g,"\\'");
+          actionBtn = `<button class="btn btn-sm btn-warn" onclick="archiveArticle('${a.id}','${safeHed}','${safePath}')">Archive</button>`;
+          if (a.github_path) actionBtn += ` <a class="btn btn-sm" href="https://blueandwhitewhs.com/${a.github_path}" target="_blank" rel="noopener">View ↗</a>`;
+        } else if (a.status === 'archived') {
+          actionBtn = `<button class="btn btn-sm btn-success" onclick="republishArticle('${a.id}')">Republish</button>`;
+        }
+      }
+      return `<div class="queue-item">
+        <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
+        <div class="q-info">
+          <div class="q-hed">${a.headline || 'Untitled draft'}</div>
+          <div class="q-meta">${a.author_name} · ${a.section||'—'} · ${formatDate(a.created_at)}</div>
+        </div>
+        <span class="status-pill s-${a.status}">${a.status}</span>
+        <div class="q-actions">${actionBtn}</div>
+      </div>`;
+    }).join('');
 }
 
 // ── ANALYTICS ─────────────────────────────────────────────────────────────────
@@ -1083,6 +1366,47 @@ function showToast(id, msg, type) {
   el.textContent = (type === 'success' ? '✓  ' : '✗  ') + msg;
   el.className = 'toast show toast-' + type;
   setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+// ── PASSWORD CHANGE ───────────────────────────────────────────────────────────
+
+async function changePassword() {
+  const current = document.getElementById('pw-current').value;
+  const next    = document.getElementById('pw-new').value;
+  const confirm = document.getElementById('pw-confirm').value;
+
+  if (!current || !next || !confirm) {
+    showToast('passwd-toast', 'Please fill in all three fields.', 'error'); return;
+  }
+  if (next.length < 6) {
+    showToast('passwd-toast', 'New password must be at least 6 characters.', 'error'); return;
+  }
+  if (next !== confirm) {
+    showToast('passwd-toast', 'New passwords do not match.', 'error'); return;
+  }
+
+  // Verify current password against Supabase
+  const { data: user } = await sb.from('users')
+    .select('id, password_hash')
+    .eq('id', currentUser.id)
+    .single();
+
+  if (!user || user.password_hash !== current) {
+    showToast('passwd-toast', 'Current password is incorrect.', 'error'); return;
+  }
+
+  const { error } = await sb.from('users')
+    .update({ password_hash: next })
+    .eq('id', currentUser.id);
+
+  if (error) {
+    showToast('passwd-toast', 'Error saving password. Try again.', 'error'); return;
+  }
+
+  document.getElementById('pw-current').value = '';
+  document.getElementById('pw-new').value = '';
+  document.getElementById('pw-confirm').value = '';
+  showToast('passwd-toast', 'Password updated successfully.', 'success');
 }
 
 // Enter key on login
