@@ -475,9 +475,9 @@ const SUPABASE_KEY = 'sb_publishable_G-U4_7cECYwC3c1Sa2MqWQ_9NHN-7_g';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ── GITHUB CONFIG ─────────────────────────────────────────────────────────────
-// Replace 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 with your GitHub PAT (repo scope).
+// Replace PASTE_YOUR_TOKEN_HERE with your GitHub PAT (repo scope).
 // Get one at: github.com → Settings → Developer settings → Personal access tokens → Tokens (classic)
-const GITHUB_TOKEN = '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';
+const GITHUB_TOKEN = 'PASTE_YOUR_TOKEN_HERE';
 const GITHUB_REPO  = 'WHSBW/theblueandwhite';   // owner/repo
 
 let currentUser = null;
@@ -624,7 +624,7 @@ function generateArticleHTML(article) {
   </footer>
 
 </div>
-<script src="../../assets/js/nav.js"></script>
+<script src="../../assets/js/nav.js"><\/script>
 </body>
 </html>`;
 }
