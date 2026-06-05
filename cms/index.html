@@ -535,6 +535,7 @@ function generateArticleHTML(article) {
   <meta name="description" content="${(article.dek||'').replace(/"/g,'&quot;')}">
   <title>${(article.headline||'Article').replace(/</g,'&lt;')} | The Blue &amp; White</title>
   <link rel="stylesheet" href="../../assets/css/style.css">
+  <style>.article-body img{max-width:100%;height:auto;border-radius:2px;display:block;margin:12px 0;}</style>
 </head>
 <body>
 <div class="site">
@@ -586,7 +587,7 @@ function generateArticleHTML(article) {
         </div>
         <div class="article-date">${pubDate}</div>
       </div>
-      ${article.photo_url ? '<div class="article-hero-img" style="margin-bottom:20px;"><img src="' + article.photo_url.replace(/"/g,'%22') + '" alt="" style="width:100%;display:block;border-radius:2px;max-height:480px;object-fit:cover;"></div>' : ''}
+      ${article.photo_url ? '<div class="article-hero-img"><img src="' + article.photo_url.replace(/"/g,'%22') + '" alt="" style="width:100%;display:block;border-radius:2px;max-height:480px;object-fit:cover;"></div>' + ((article.photo_caption || article.photo_credit) ? '<div class="article-img-caption">' + (article.photo_caption ? (article.photo_caption+'').replace(/</g,'&lt;') : '') + (article.photo_credit ? (article.photo_caption ? ' &middot; ' : '') + 'Photo: ' + (article.photo_credit+'').replace(/</g,'&lt;') : '') + '</div>' : '') : ''}
       <div class="article-body">
         ${article.body||''}
       </div>
