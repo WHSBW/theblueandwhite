@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Sports from The Blue &amp; White, the student voice of Paul R. Wharton High School, Tampa, FL.">
+  <title>Sports | The Blue &amp; White</title>
+  <link rel="stylesheet" href="../../assets/css/style.css">
+</head>
+<body>
+<div class="site">
+
+  <header class="masthead">
+    <div class="masthead-top">
+      <span class="masthead-meta">Paul R. Wharton High School &nbsp;&middot;&nbsp; Tampa, FL &nbsp;&middot;&nbsp; Est. 1997</span>
+      <div class="masthead-actions">
+        <a href="../../about.html">About</a>
+        <a href="../../staff.html">Staff</a>
+        <a href="../../contact.html">Contact</a>
+      </div>
+    </div>
+    <div class="masthead-center">
+      <div class="site-title"><a href="../../index.html">The Blue &amp; White</a></div>
+      <div class="site-tagline">The Student Voice of Paul R. Wharton High School</div>
+    </div>
+    <nav>
+      <div class="nav-inner">
+        <a href="../../articles/news/">News</a>
+        <a href="../../articles/sports/" class="active">Sports</a>
+        <a href="../../articles/culture/">Culture</a>
+        <a href="../../articles/hot-spot/">Hot Spot</a>
+        <a href="../../articles/we-are-wharton/">We Are Wharton</a>
+        <a href="../../articles/editorial/">Editorial</a>
+        <a href="../../articles/wharton-brief/">Wharton Brief</a>
+      </div>
+    </nav>
+  </header>
+
+  <div class="breadcrumb">
+    <a href="../../index.html">Home</a>
+    <span class="breadcrumb-sep">&rsaquo;</span>
+    <span style="color:var(--text-dark);">Sports</span>
+  </div>
+
+  <div class="section-page">
+    <div class="section-page-header">
+      <span class="section-label label-sports">Section</span>
+      <h1 class="section-page-title">Sports</h1>
+      <p class="section-page-sub">Scores, athletes, and the teams of Paul R. Wharton High School.</p>
+    </div>
+    <div class="bw-feed" id="feed"></div>
+  </div>
+
+  <footer>
+    <div>
+      <div class="ft-title">The Blue &amp; White</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:4px;">Paul R. Wharton High School &nbsp;&middot;&nbsp; Tampa, FL &nbsp;&middot;&nbsp; Est. 1997</div>
+    </div>
+    <div class="ft-links">
+      <a href="../../about.html">About</a>
+      <a href="../../staff.html">Staff</a>
+      <a href="../../ethics.html">Ethics Policy</a>
+      <a href="../../contact.html">Contact</a>
+      <a href="https://instagram.com" target="_blank" rel="noopener">Instagram</a>
+      <a href="https://youtube.com" target="_blank" rel="noopener">YouTube</a>
+    </div>
+    <div class="ft-copy">&copy; 2026 The Blue &amp; White</div>
+  </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../assets/js/feed.js"></script>
+<script src="../../assets/js/nav.js"></script>
+<script>
+  BWFeed.render({ target: '#feed', section: 'Sports' });
+</script>
+</body>
+</html>
