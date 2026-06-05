@@ -182,6 +182,7 @@ footer { background: var(--navy); padding: 22px 24px; display: flex; justify-con
 .article-hero-img { width: 100%; aspect-ratio: 16/9; background: linear-gradient(160deg, #1e3a52 0%, #0d1b2a 100%); border-radius: 2px; margin-bottom: 10px; overflow: hidden; }
 .article-hero-img img { width: 100%; height: 100%; object-fit: cover; }
 .article-img-caption { font-size: 11px; color: var(--text-muted); margin-bottom: 28px; font-style: italic; }
+.article-body img { max-width:100%; height:auto; border-radius:2px; }
 .article-body { font-family: 'Source Serif 4', serif; font-size: 17px; line-height: 1.8; color: var(--text-mid); font-weight: 300; }
 .article-body p { margin-bottom: 1.4em; }
 .article-body p:first-child::first-letter { font-family: 'Playfair Display', serif; font-size: 64px; font-weight: 700; float: left; line-height: 0.85; padding-right: 8px; padding-top: 6px; color: var(--navy); }

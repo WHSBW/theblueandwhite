@@ -278,6 +278,10 @@
                 <span style="width:1px;background:var(--light-gray);margin:2px 4px;"></span>
                 <button class="tb-btn" onclick="document.execCommand('undo')">↩</button>
                 <button class="tb-btn" onclick="document.execCommand('redo')">↪</button>
+                <span style="width:1px;background:var(--light-gray);margin:2px 4px;"></span>
+                <button class="tb-btn" title="Float left — click image first" onclick="imgAlign('left')">← Img</button>
+                <button class="tb-btn" title="Float right — click image first" onclick="imgAlign('right')">Img →</button>
+                <button class="tb-btn" title="Full width — click image first" onclick="imgAlign('full')">↔ Full</button>
               </div>
               <div class="editor-area" id="w-body" contenteditable="true" spellcheck="true" data-placeholder="Write or paste your article here. Spell check is active. Separate paragraphs with Enter."></div>
               <div class="editor-footer">
@@ -350,6 +354,10 @@
                     <button class="tb-btn" onclick="document.execCommand('italic')"><i>I</i></button>
                     <button class="tb-btn" onclick="document.execCommand('undo')">↩</button>
                     <button class="tb-btn" onclick="document.execCommand('redo')">↪</button>
+                    <span style="width:1px;background:var(--light-gray);margin:2px 4px;"></span>
+                    <button class="tb-btn" title="Float left — click image first" onclick="imgAlign('left')">← Img</button>
+                    <button class="tb-btn" title="Float right — click image first" onclick="imgAlign('right')">Img →</button>
+                    <button class="tb-btn" title="Full width — click image first" onclick="imgAlign('full')">↔ Full</button>
                   </div>
                   <div class="editor-area" id="rv-body" contenteditable="true" spellcheck="true" style="min-height:200px;" data-placeholder="Article body..."></div>
                   <div class="editor-footer"><span class="wc" id="rv-wc">0 words</span></div>
@@ -535,7 +543,6 @@ function generateArticleHTML(article) {
   <meta name="description" content="${(article.dek||'').replace(/"/g,'&quot;')}">
   <title>${(article.headline||'Article').replace(/</g,'&lt;')} | The Blue &amp; White</title>
   <link rel="stylesheet" href="../../assets/css/style.css">
-  <style>.article-body img{max-width:100%;height:auto;border-radius:2px;display:block;margin:12px 0;}</style>
 </head>
 <body>
 <div class="site">
@@ -587,7 +594,7 @@ function generateArticleHTML(article) {
         </div>
         <div class="article-date">${pubDate}</div>
       </div>
-      ${article.photo_url ? '<div class="article-hero-img"><img src="' + article.photo_url.replace(/"/g,'%22') + '" alt="" style="width:100%;display:block;border-radius:2px;max-height:480px;object-fit:cover;"></div>' + ((article.photo_caption || article.photo_credit) ? '<div class="article-img-caption">' + (article.photo_caption ? (article.photo_caption+'').replace(/</g,'&lt;') : '') + (article.photo_credit ? (article.photo_caption ? ' &middot; ' : '') + 'Photo: ' + (article.photo_credit+'').replace(/</g,'&lt;') : '') + '</div>' : '') : ''}
+      ${article.photo_url ? '<div class="article-hero-img"><img src="' + article.photo_url.replace(/"/g,'%22') + '" alt="" style="width:100%;display:block;border-radius:2px;height:auto;"></div>' + ((article.photo_caption || article.photo_credit) ? '<div class="article-img-caption">' + (article.photo_caption ? (article.photo_caption+'').replace(/</g,'&lt;') : '') + (article.photo_credit ? (article.photo_caption ? ' &middot; ' : '') + 'Photo: ' + (article.photo_credit+'').replace(/</g,'&lt;') : '') + '</div>' : '') : ''}
       <div class="article-body">
         ${article.body||''}
       </div>
@@ -1330,6 +1337,31 @@ if (wBody) {
     }, 50);
   });
   wBody.addEventListener('input', () => updateWC('w-body','w-wc'));
+}
+
+// Image alignment in body editor
+var _lastImg = null;
+document.addEventListener('click', function(e) {
+  if (e.target.tagName === 'IMG') {
+    var body = e.target.closest('#w-body, #rv-body');
+    if (body) {
+      body.querySelectorAll('img').forEach(function(img){ img.classList.remove('bw-img-selected'); });
+      e.target.classList.add('bw-img-selected');
+      _lastImg = e.target;
+    }
+  }
+});
+function imgAlign(dir) {
+  if (!_lastImg) { showToast('writer-toast', 'Click on an image in the body first, then press an align button.', 'info'); return; }
+  _lastImg.classList.remove('bw-img-selected');
+  if (dir === 'left') {
+    Object.assign(_lastImg.style, {float:'left', width:'42%', margin:'0 16px 12px 0', display:'inline', maxWidth:'42%'});
+  } else if (dir === 'right') {
+    Object.assign(_lastImg.style, {float:'right', width:'42%', margin:'0 0 12px 16px', display:'inline', maxWidth:'42%'});
+  } else if (dir === 'full') {
+    Object.assign(_lastImg.style, {float:'none', width:'100%', height:'auto', display:'block', margin:'14px 0', clear:'both', maxWidth:'100%'});
+  }
+  _lastImg = null;
 }
 const rvBody = document.getElementById('rv-body');
 if (rvBody) rvBody.addEventListener('input', () => updateWC('rv-body','rv-wc'));

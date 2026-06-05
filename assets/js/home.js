@@ -19,7 +19,7 @@
   function label(s){return LABEL_CLASS[s]||'label-news';}
   function byline(a,withDate){var parts=['By <strong>'+esc(a.author_name||'Staff')+'</strong>'];if(withDate&&a.published_at)parts.push(esc(fmtDate(a.published_at)));return parts.join(' &nbsp;&middot;&nbsp; ');}
   function setHTML(id,html){var el=document.getElementById(id);if(el)el.innerHTML=html;}
-  function bgStyle(photoUrl){return photoUrl?'style="background-image:url(\''+photoUrl.replace(/'/g,'%27')+'\');background-size:cover;background-position:center;"':'';}
+  function bgStyle(photoUrl){return photoUrl?'style="background-image:url(\''+photoUrl.replace(/'/g,'%27')+'\');background-size:cover;background-position:center 25%;"':'';}
 
   function slideHTML(a){
     return '<div class="carousel-slide">'+
