@@ -1,23 +1,17 @@
 // assets/js/feed.js — The Blue & White
 // Pulls PUBLISHED articles from Supabase and renders them as story cards.
 // Used by the homepage and by each section landing page.
-// Requires the supabase-js script to be loaded on the page before this file.
+// Requires the supabase-js script loaded on the page before this file.
 
 (function () {
   'use strict';
 
-  // Public (publishable) key — safe to live in client-side code.
   var SUPABASE_URL = 'https://cybjclqcdmrjhoaoiund.supabase.co';
   var SUPABASE_KEY = 'sb_publishable_G-U4_7cECYwC3c1Sa2MqWQ_9NHN-7_g';
 
-  // Map a section name to its colored label class (defined in style.css).
   var LABEL_CLASS = {
-    'News': 'label-news',
-    'Sports': 'label-sports',
-    'Culture': 'label-culture',
-    'Hot Spot': 'label-hotspot',
-    'We Are Wharton': 'label-wharton',
-    'Editorial': 'label-editorial'
+    'News': 'label-news', 'Sports': 'label-sports', 'Culture': 'label-culture',
+    'Hot Spot': 'label-hotspot', 'We Are Wharton': 'label-wharton', 'Editorial': 'label-editorial'
   };
 
   function escapeHTML(value) {
@@ -25,20 +19,19 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch];
     });
   }
-
   function formatDate(iso) {
     if (!iso) return '';
     var d = new Date(iso);
     if (isNaN(d.getTime())) return '';
     return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   }
-
-  // Build the web address of a published article.
-  // github_path looks like "articles/news/some-slug.html"; a leading slash
-  // makes it work from any page on the site (root or section folder).
   function articleURL(article) {
     var p = (article.github_path || '').replace(/^\/+/, '');
     return p ? '/' + p : '#';
+  }
+  function thumbStyle(photoUrl) {
+    if (!photoUrl) return '';
+    return 'style="background-image:url(\'' + photoUrl.replace(/'/g, '%27') + '\');background-size:cover;background-position:center;"';
   }
 
   function cardHTML(article) {
@@ -48,7 +41,7 @@
 
     return '' +
       '<div class="more-card">' +
-        '<div class="more-thumb"></div>' +
+        '<div class="more-thumb" ' + thumbStyle(article.photo_url) + '></div>' +
         '<span class="more-label ' + labelClass + '">' + escapeHTML(article.section || '') + '</span>' +
         '<a href="' + articleURL(article) + '"><div class="more-hed">' +
           escapeHTML(article.headline || 'Untitled') + '</div></a>' +
@@ -57,10 +50,6 @@
       '</div>';
   }
 
-  // opts: { target, section, limit }
-  //   target  - CSS selector or element for the grid container (required)
-  //   section - section name to filter by (e.g. 'News'); omit for ALL sections
-  //   limit   - max stories to show (default 60)
   async function render(opts) {
     opts = opts || {};
     var el = typeof opts.target === 'string'
@@ -78,7 +67,7 @@
     try {
       var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
       var query = sb.from('articles')
-        .select('headline,dek,section,author_name,published_at,github_path')
+        .select('headline,dek,section,author_name,published_at,github_path,photo_url')
         .eq('status', 'published')
         .order('published_at', { ascending: false })
         .limit(opts.limit || 60);
@@ -105,7 +94,6 @@
     }
   }
 
-  // Minimal layout styles, injected once so section pages stay clean.
   var css = '' +
     '.section-page{padding:28px 24px 44px;}' +
     '.section-page-header{border-bottom:2px solid var(--navy);padding-bottom:14px;margin-bottom:26px;}' +

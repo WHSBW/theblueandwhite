@@ -265,6 +265,10 @@
             <input class="form-input" id="w-dek" type="text" placeholder="The dek appears in italic below your headline on the published page">
           </div>
           <div class="form-group">
+            <label class="form-label">Lead photo URL <span style="color:var(--text-muted);font-weight:400;">(optional — hero image on the article page and story cards; paste a hosted image link)</span></label>
+            <input class="form-input" id="w-photo" type="url" placeholder="https://example.com/your-photo.jpg">
+          </div>
+          <div class="form-group">
             <label class="form-label">Article Body <span class="req">*</span></label>
             <div class="editor-wrap">
               <div class="editor-toolbar">
@@ -578,6 +582,7 @@ function generateArticleHTML(article) {
         </div>
         <div class="article-date">${pubDate}</div>
       </div>
+      ${article.photo_url ? '<div class="article-hero-img" style="margin-bottom:20px;"><img src="' + article.photo_url.replace(/"/g,'%22') + '" alt="" style="width:100%;display:block;border-radius:2px;max-height:480px;object-fit:cover;"></div>' : ''}
       <div class="article-body">
         ${article.body||''}
       </div>
@@ -851,6 +856,7 @@ async function loadArticleForEdit(id) {
   document.getElementById('w-section').value = data.section || '';
   document.getElementById('w-caption').value = data.photo_caption || '';
   document.getElementById('w-credit').value = data.photo_credit || '';
+  document.getElementById('w-photo').value = data.photo_url || '';
   updateWC('w-body','w-wc');
   if (data.editor_notes) {
     document.getElementById('returned-notes-section').style.display = 'block';
@@ -910,6 +916,7 @@ function getArticlePayload(status) {
   return {
     headline: hed,
     dek: document.getElementById('w-dek').value.trim(),
+    photo_url: document.getElementById('w-photo').value.trim(),
     body: body,
     section: document.getElementById('w-section').value,
     photo_caption: document.getElementById('w-caption').value.trim(),
@@ -1094,7 +1101,7 @@ async function loadAllArticles() {
         } else if (a.status === 'published') {
           const safeHed  = (a.headline||'').replace(/'/g,"\\'");
           const safePath = (a.github_path||'').replace(/'/g,"\\'");
-          actionBtn = `<button class="btn btn-sm btn-warn" onclick="archiveArticle('${a.id}','${safeHed}','${safePath}')">Archive</button>`;
+          actionBtn = `<button class="btn btn-sm" onclick="openReview('${a.id}')">Edit</button> <button class="btn btn-sm btn-warn" onclick="archiveArticle('${a.id}','${safeHed}','${safePath}')">Archive</button>`;
           if (a.github_path) actionBtn += ` <a class="btn btn-sm" href="https://blueandwhitewhs.com/${a.github_path}" target="_blank" rel="noopener">View ↗</a>`;
         } else if (a.status === 'archived') {
           actionBtn = `<button class="btn btn-sm btn-success" onclick="republishArticle('${a.id}')">Republish</button>`;
