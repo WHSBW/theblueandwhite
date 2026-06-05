@@ -339,6 +339,10 @@
                 <input class="form-input" id="rv-dek" type="text">
               </div>
               <div class="form-group">
+                <label class="form-label">Lead Photo URL <span style="color:var(--text-muted);font-weight:400;">(optional)</span></label>
+                <input class="form-input" id="rv-photo" type="url" placeholder="https://example.com/photo.jpg">
+              </div>
+              <div class="form-group">
                 <label class="form-label">Article Body — edit directly</label>
                 <div class="editor-wrap">
                   <div class="editor-toolbar">
@@ -970,6 +974,7 @@ async function openReview(id) {
   currentArticleId = id;
   document.getElementById('rv-hed').value = data.headline || '';
   document.getElementById('rv-dek').value = data.dek || '';
+  document.getElementById('rv-photo').value = data.photo_url || '';
   document.getElementById('rv-body').innerHTML = data.body || '';
   document.getElementById('rv-notes-thread').innerHTML = data.editor_notes
     ? `<div class="note-item editor-note"><div class="note-meta"><strong>Previous notes</strong></div><div class="note-text">${data.editor_notes}</div></div>`
@@ -997,12 +1002,13 @@ async function publishArticle() {
   const hed  = document.getElementById('rv-hed').value.trim();
   const dek  = document.getElementById('rv-dek').value.trim();
   const body = document.getElementById('rv-body').innerHTML;
+  const photo_url = (document.getElementById('rv-photo') ? document.getElementById('rv-photo').value.trim() : '');
 
   // Pull full article record so we have author_name, section, etc.
   const { data: article } = await sb.from('articles').select('*').eq('id', currentArticleId).single();
   if (!article) { showToast('review-toast', 'Could not load article data.', 'error'); if (btn) { btn.disabled=false; btn.textContent='Publish to Site'; } return; }
 
-  const merged = { ...article, headline: hed, dek: dek, body: body };
+  const merged = { ...article, headline: hed, dek: dek, body: body, photo_url: photo_url };
   const slug   = makeSlug(hed);
   const folder = SECTION_FOLDER[merged.section] || 'news';
   const path   = `articles/${folder}/${slug}.html`;
@@ -1011,7 +1017,7 @@ async function publishArticle() {
   try {
     await pushToGitHub(path, html, hed);
     await sb.from('articles').update({
-      headline: hed, dek: dek, body: body,
+      headline: hed, dek: dek, body: body, photo_url: photo_url,
       status: 'published',
       published_at: new Date().toISOString(),
       github_path: path
