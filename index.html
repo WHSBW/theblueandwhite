@@ -26,7 +26,7 @@
     </div>
     <nav>
       <div class="nav-inner">
-        <a href="articles/news/" class="active">News</a>
+        <a href="articles/news/">News</a>
         <a href="articles/sports/">Sports</a>
         <a href="articles/culture/">Culture</a>
         <a href="articles/hot-spot/">Hot Spot</a>
@@ -48,62 +48,24 @@
   <!-- TOP SPLIT: CAROUSELS -->
   <div class="top-split">
 
-    <!-- STORIES CAROUSEL -->
+    <!-- STORIES CAROUSEL — populated by home.js -->
     <div class="carousel-wrap stories">
       <div class="carousel-header">
         <h2>Top Stories</h2>
         <div class="carousel-controls">
-          <button class="carr-btn" onclick="moveCarousel('story',-1)" aria-label="Previous story">&#8592;</button>
-          <button class="carr-btn" onclick="moveCarousel('story',1)" aria-label="Next story">&#8594;</button>
+          <button class="carr-btn" onclick="BWHome.moveStory(-1)" aria-label="Previous story">&#8592;</button>
+          <button class="carr-btn" onclick="BWHome.moveStory(1)" aria-label="Next story">&#8594;</button>
         </div>
       </div>
       <div class="carousel-track" id="storyTrack">
-
-        <!-- SLIDE 1 — replace with real story -->
-        <div class="carousel-slide">
-          <a href="articles/news/your-first-story.html">
-            <div class="slide-img">
-              <!-- Replace src with real photo: assets/photos/articles/your-photo.jpg -->
-              <div class="slide-badge">Top Story</div>
-            </div>
-            <span class="section-label label-news">News</span>
-            <div class="headline-main">Your headline goes here — write something specific and compelling</div>
-          </a>
-          <p class="byline">By <strong>Reporter Name</strong> &nbsp;·&nbsp; Staff Reporter &nbsp;·&nbsp; Date</p>
-          <p class="deck">Your dek goes here. One sentence that tells the reader why this story matters to them right now.</p>
-        </div>
-
-        <!-- SLIDE 2 -->
-        <div class="carousel-slide">
-          <a href="articles/sports/your-sports-story.html">
-            <div class="slide-img"></div>
-            <span class="section-label label-sports">Sports</span>
-            <div class="headline-main">Your second top story headline goes here</div>
-          </a>
-          <p class="byline">By <strong>Reporter Name</strong> &nbsp;·&nbsp; Sports Editor &nbsp;·&nbsp; Date</p>
-          <p class="deck">Second story dek goes here. Keep it under 30 words.</p>
-        </div>
-
-        <!-- SLIDE 3 -->
-        <div class="carousel-slide">
-          <a href="articles/we-are-wharton/your-feature.html">
-            <div class="slide-img"></div>
-            <span class="section-label label-wharton">We Are Wharton</span>
-            <div class="headline-main">Your third top story headline goes here</div>
-          </a>
-          <p class="byline">By <strong>Reporter Name</strong> &nbsp;·&nbsp; Features &nbsp;·&nbsp; Date</p>
-          <p class="deck">Third story dek goes here.</p>
-        </div>
-
+        <!-- home.js fills this with live story slides -->
       </div>
       <div class="carousel-dots" id="storyDots">
-        <button class="dot active" onclick="goToSlide('story',0)" aria-label="Story 1"></button>
-        <button class="dot" onclick="goToSlide('story',1)" aria-label="Story 2"></button>
-        <button class="dot" onclick="goToSlide('story',2)" aria-label="Story 3"></button>
+        <!-- home.js fills this with dots to match slide count -->
       </div>
     </div>
 
-    <!-- WHARTON BRIEF CAROUSEL -->
+    <!-- WHARTON BRIEF CAROUSEL — update YouTube links by hand -->
     <div class="carousel-wrap">
       <div class="carousel-header">
         <h2>Wharton Brief</h2>
@@ -114,11 +76,9 @@
       </div>
       <div class="carousel-track" id="briefTrack">
 
-        <!-- BRIEF SLIDE 1 — replace YouTube link -->
         <div class="brief-slide">
           <a href="https://youtube.com" target="_blank" rel="noopener">
             <div class="brief-thumb">
-              <!-- Replace with YouTube thumbnail: assets/photos/articles/brief-ep1-thumb.jpg -->
               <div class="play-btn"></div>
             </div>
           </a>
@@ -127,7 +87,6 @@
           <div class="brief-deck">Add a short description of what this episode covers.</div>
         </div>
 
-        <!-- BRIEF SLIDE 2 -->
         <div class="brief-slide">
           <a href="https://youtube.com" target="_blank" rel="noopener">
             <div class="brief-thumb">
@@ -148,111 +107,53 @@
 
   </div><!-- end top-split -->
 
-  <!-- HERO GRID -->
+  <!-- HERO GRID — populated by home.js -->
   <div class="hero-grid">
-    <div class="hero-main">
-      <span class="section-label label-culture">Culture</span>
-      <div class="thumb"></div>
-      <a href="articles/culture/your-culture-story.html">
-        <h2 class="headline-sub">Your culture or feature story headline goes here</h2>
-      </a>
-      <p class="byline">By <strong>Reporter Name</strong> &nbsp;·&nbsp; Culture Editor</p>
-      <p class="deck">Your dek goes here. One or two sentences pulling the reader into the story.</p>
+    <div class="hero-main" id="heroMain">
+      <!-- home.js: newest story overall -->
     </div>
     <div class="hero-side">
-      <div class="hero-secondary">
-        <span class="section-label label-news">News</span>
-        <a href="articles/news/second-news-story.html">
-          <h2 class="headline-sub">Second news story headline goes here</h2>
-        </a>
-        <p class="byline">By <strong>Reporter Name</strong> &nbsp;·&nbsp; Staff Reporter</p>
-        <p class="deck" style="font-size:13px;">Short dek for this story — one sentence.</p>
+      <div class="hero-secondary" id="heroSecondary">
+        <!-- home.js: second newest -->
       </div>
-      <div class="hero-tertiary">
-        <span class="section-label label-sports">Sports</span>
-        <a href="articles/sports/second-sports-story.html">
-          <h2 class="headline-sub">Sports story headline goes here</h2>
-        </a>
-        <p class="byline">By <strong>Reporter Name</strong> &nbsp;·&nbsp; Sports</p>
-        <p class="deck" style="font-size:13px;">Short dek for this sports story.</p>
+      <div class="hero-tertiary" id="heroTertiary">
+        <!-- home.js: third newest -->
       </div>
     </div>
   </div>
 
-  <!-- THREE COLUMN CONTENT -->
+  <!-- THREE COLUMN CONTENT — section columns populated by home.js, headers stay fixed -->
   <div class="content-area">
 
     <div class="content-col">
       <div class="col-header" style="color:var(--culture);">Culture</div>
-      <div class="col-content">
-        <div class="article-card">
-          <span class="section-label label-culture">Review</span>
-          <div class="thumb-sm"></div>
-          <a href="articles/culture/culture-story-1.html"><h3 class="headline-sm">Culture story one headline</h3></a>
-          <p class="deck" style="font-size:12px;">Short dek for this culture story.</p>
-        </div>
-        <div class="article-card">
-          <span class="section-label label-culture">Arts</span>
-          <a href="articles/culture/culture-story-2.html"><h3 class="headline-sm">Culture story two headline</h3></a>
-          <p class="deck" style="font-size:12px;">Short dek for this culture story.</p>
-        </div>
+      <div class="col-content" id="colCulture">
+        <!-- home.js: latest 2 Culture stories -->
       </div>
     </div>
 
     <div class="content-col center-col">
       <div class="col-header" style="color:var(--hotspot);">Hot Spot</div>
-      <div class="col-content">
-        <div class="article-card">
-          <span class="section-label label-hotspot">Food &amp; Drink</span>
-          <div class="thumb-sm"></div>
-          <a href="articles/hot-spot/hot-spot-story-1.html"><h3 class="headline-sm">Hot Spot story one headline</h3></a>
-          <p class="deck" style="font-size:12px;">Short dek for this Hot Spot story.</p>
-        </div>
-        <div class="article-card" style="display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:center;flex:1;min-height:90px;">
-          <span class="section-label label-hotspot">Events</span>
-          <a href="articles/hot-spot/hot-spot-story-2.html"><h3 class="headline-sm">Hot Spot story two headline</h3></a>
-        </div>
+      <div class="col-content" id="colHotspot">
+        <!-- home.js: latest 2 Hot Spot stories -->
       </div>
     </div>
 
     <div class="content-col center-col">
       <div class="col-header" style="color:var(--wharton);">We Are Wharton</div>
-      <div class="col-content">
-        <div class="article-card">
-          <span class="section-label label-wharton">Profile</span>
-          <div class="thumb-sm"></div>
-          <a href="articles/we-are-wharton/waw-story-1.html"><h3 class="headline-sm">We Are Wharton story one headline</h3></a>
-          <p class="deck" style="font-size:12px;">Short dek for this story.</p>
-        </div>
-        <div class="article-card" style="display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:center;flex:1;min-height:90px;">
-          <span class="section-label label-wharton">Spotlight</span>
-          <a href="articles/we-are-wharton/waw-story-2.html"><h3 class="headline-sm">We Are Wharton story two headline</h3></a>
-        </div>
+      <div class="col-content" id="colWharton">
+        <!-- home.js: latest 2 We Are Wharton stories -->
       </div>
     </div>
 
   </div><!-- end content-area -->
 
-  <!-- FEATURE STRIP -->
-  <div class="feature-strip">
-    <a href="articles/editorial/editorial-story-1.html" class="feature-card">
-      <span class="feature-label">Editorial</span>
-      <div class="feature-headline">Editorial feature story headline goes here</div>
-      <div class="feature-deck">Short description of this editorial piece.</div>
-    </a>
-    <a href="articles/sports/sports-feature.html" class="feature-card">
-      <span class="feature-label">Sports</span>
-      <div class="feature-headline">Sports feature story headline goes here</div>
-      <div class="feature-deck">Short description of this sports feature.</div>
-    </a>
-    <a href="articles/hot-spot/hot-spot-feature.html" class="feature-card">
-      <span class="feature-label">Hot Spot</span>
-      <div class="feature-headline">Hot Spot feature story headline goes here</div>
-      <div class="feature-deck">Short description of this Hot Spot feature.</div>
-    </a>
+  <!-- FEATURE STRIP — populated by home.js (Editorial / Sports / Hot Spot) -->
+  <div class="feature-strip" id="featureStrip">
+    <!-- home.js fills these three feature cards -->
   </div>
 
-  <!-- VIDEO SECTION -->
+  <!-- VIDEO SECTION — update YouTube links and titles by hand -->
   <div class="video-section">
     <div class="video-section-header">
       <h2>Wharton Brief — All Episodes</h2>
@@ -300,10 +201,13 @@
       <a href="https://instagram.com" target="_blank" rel="noopener">Instagram</a>
       <a href="https://youtube.com" target="_blank" rel="noopener">YouTube</a>
     </div>
-    <div class="ft-copy">&copy; 2025 The Blue &amp; White</div>
+    <div class="ft-copy">&copy; 2026 The Blue &amp; White</div>
   </footer>
 
 </div><!-- end .site -->
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/js/home.js"></script>
 <script src="assets/js/nav.js"></script>
 </body>
 </html>
