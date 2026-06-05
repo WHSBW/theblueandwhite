@@ -286,6 +286,7 @@
               <div class="editor-area" id="w-body" contenteditable="true" spellcheck="true" data-placeholder="Write or paste your article here. Spell check is active. Separate paragraphs with Enter."></div>
               <div class="editor-footer">
                 <span class="wc" id="w-wc">0 words</span>
+                <span id="autosave-indicator" style="font-size:11px;color:var(--text-muted);margin-left:10px;"></span>
                 <span class="tracking-live"><div class="t-dot"></div>Session tracked</span>
               </div>
             </div>
@@ -1098,6 +1099,17 @@ async function republishArticle(id) {
   }
 }
 
+async function deleteArticle(id, headline) {
+  if (!confirm(`Permanently delete "${headline}"? This cannot be undone.`)) return;
+  try {
+    await sb.from('articles').delete().eq('id', id);
+    showToast('articles-toast', `"${headline}" permanently deleted.`, 'success');
+    loadAllArticles();
+  } catch(err) {
+    showToast('articles-toast', `Error: ${err.message}`, 'error');
+  }
+}
+
 // ── ALL ARTICLES ──────────────────────────────────────────────────────────────
 
 async function loadAllArticles() {
@@ -1118,7 +1130,8 @@ async function loadAllArticles() {
           actionBtn = `<button class="btn btn-sm" onclick="openReview('${a.id}')">Edit</button> <button class="btn btn-sm btn-warn" onclick="archiveArticle('${a.id}','${safeHed}','${safePath}')">Archive</button>`;
           if (a.github_path) actionBtn += ` <a class="btn btn-sm" href="https://blueandwhitewhs.com/${a.github_path}" target="_blank" rel="noopener">View ↗</a>`;
         } else if (a.status === 'archived') {
-          actionBtn = `<button class="btn btn-sm btn-success" onclick="republishArticle('${a.id}')">Republish</button>`;
+          const safeHedArc = (a.headline||'').replace(/'/g,"\'");
+          actionBtn = `<button class="btn btn-sm btn-success" onclick="republishArticle('${a.id}')">Republish</button> <button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="deleteArticle('${a.id}','${safeHedArc}')">Delete</button>`;
         }
       }
       return `<div class="queue-item">
@@ -1337,6 +1350,10 @@ if (wBody) {
     }, 50);
   });
   wBody.addEventListener('input', () => updateWC('w-body','w-wc'));
+  wBody.addEventListener('input', scheduleAutosave);
+  const wHed = document.getElementById('w-hed'); if (wHed) wHed.addEventListener('input', scheduleAutosave);
+  const wDek = document.getElementById('w-dek'); if (wDek) wDek.addEventListener('input', scheduleAutosave);
+  const wSec = document.getElementById('w-section'); if (wSec) wSec.addEventListener('change', scheduleAutosave);
 }
 
 // Image alignment in body editor
@@ -1365,6 +1382,35 @@ function imgAlign(dir) {
 }
 const rvBody = document.getElementById('rv-body');
 if (rvBody) rvBody.addEventListener('input', () => updateWC('rv-body','rv-wc'));
+
+// ── AUTOSAVE ──────────────────────────────────────────────────────────────────
+var _autosaveTimer = null;
+function scheduleAutosave() {
+  clearTimeout(_autosaveTimer);
+  _autosaveTimer = setTimeout(doAutosave, 3000);
+}
+async function doAutosave() {
+  if (!currentUser) return;
+  const hedEl = document.getElementById('w-hed');
+  if (!hedEl || !hedEl.value.trim()) return;
+  const payload = getArticlePayload('draft');
+  if (!payload) return;
+  const ind = document.getElementById('autosave-indicator');
+  if (ind) ind.textContent = 'Saving…';
+  try {
+    if (currentArticleId) {
+      await sb.from('articles').update(payload).eq('id', currentArticleId);
+    } else {
+      const { data, error } = await sb.from('articles')
+        .insert([{...payload, author_id: currentUser.id, author_name: currentUser.name}])
+        .select().single();
+      if (!error && data) { currentArticleId = data.id; }
+    }
+    if (ind) { ind.textContent = 'Autosaved ✓'; setTimeout(function(){ if(ind) ind.textContent=''; }, 2500); }
+  } catch(e) {
+    if (ind) ind.textContent = 'Save failed';
+  }
+}
 
 // ── UTILITIES ─────────────────────────────────────────────────────────────────
 
