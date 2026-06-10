@@ -344,3 +344,47 @@ Alignment styles are saved as inline styles with the body HTML.
 
 *Document written June 5, 2026. Update this when major new features ship.*
 
+## Recycle Bin & Auto-Takedown (added June 2026)
+
+### What it does
+- **Recycle Bin:** "Delete" no longer exists. Archived articles get a "♻ Recycle"
+  button that sets `status = 'trashed'` and stamps `trashed_at`. Trashed articles
+  appear in the CMS Recycle Bin view (editors + adviser) with Restore and Delete
+  Forever buttons. Anything trashed 30+ days is permanently deleted automatically.
+- **Auto-takedown:** The review pane has an optional "Auto-takedown" date field
+  (with a +30 days shortcut). Saved to `takedown_at` on publish. When the date
+  passes, the article is automatically removed from the live site and set to
+  `archived` (still in the CMS, re-publishable). Blank = evergreen, never expires.
+
+### How it runs
+A **Cloudflare Cron Trigger** (`0 9 * * *` = 9:00 AM UTC / 4–5 AM Tampa, daily)
+fires the `scheduled` handler in the Worker (morning-field-8e58). Each night it:
+1. Finds `status = 'published'` rows with `takedown_at <= now` → deletes the
+   GitHub file → sets `status = 'archived'`, clears `takedown_at`. If GitHub
+   errors, it skips that article and retries the next night.
+2. Finds `status = 'trashed'` rows with `trashed_at` older than 30 days →
+   deletes the GitHub file if one somehow still exists → deletes the row.
+
+### What it needed (already done — for rebuild reference)
+- Supabase columns: `ALTER TABLE articles ADD COLUMN IF NOT EXISTS trashed_at
+  timestamptz;` and the same for `takedown_at`.
+- New article status value: `trashed` (alongside draft/pending/returned/
+  published/archived).
+- Worker secret `SUPABASE_SERVICE_KEY` = the Supabase **service_role** key
+  (Supabase → Settings → API). The Worker talks to Supabase's REST API with it;
+  it bypasses RLS, which is why it lives ONLY in Cloudflare, never in the CMS.
+- Cron trigger added under Worker → Settings → Trigger Events.
+- CMS (`cms/index.html`): Recycle Bin view, trash/restore/delete-forever
+  functions, takedown date field in review pane, trashed articles excluded
+  from All Articles, "comes down [date]" shown on scheduled articles.
+
+### Troubleshooting
+- **Publish button says "GitHub error: Requires authentication"** → the
+  GITHUB_TOKEN secret is wrong/expired. Regenerate the token on GitHub,
+  paste into the Worker secret, deploy. (Don't investigate; just re-mint.)
+- **Nightly sweep not running** → check the Cron Trigger exists and the
+  Worker deploy didn't remove the `scheduled` handler. Cloudflare →
+  Worker → Logs shows scheduled invocations.
+- **Article re-archived right after republish** → shouldn't happen
+  (republish clears `takedown_at`), but if it does, check that column.
+
