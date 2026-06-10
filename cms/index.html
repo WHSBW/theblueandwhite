@@ -103,6 +103,8 @@
     .s-pending{background:var(--warn-bg);color:var(--warn);}
     .s-published{background:var(--success-bg);color:var(--success);}
     .s-returned{background:var(--danger-bg);color:var(--danger);}
+    .s-trashed{background:var(--danger-bg);color:var(--danger);}
+    .s-archived{background:var(--silver-pale);color:var(--text-muted);}
     .q-actions{display:flex;gap:5px;flex-shrink:0;}
     .due-badge{font-size:10px;font-weight:500;padding:2px 7px;border-radius:2px;flex-shrink:0;}
     .due-ok{background:var(--success-bg);color:var(--success);}
@@ -348,6 +350,15 @@
                 <input class="form-input" id="rv-photo" type="url" placeholder="https://example.com/photo.jpg">
               </div>
               <div class="form-group">
+                <label class="form-label">Auto-takedown <span style="color:var(--text-muted);font-weight:400;">(optional — article comes off the site automatically on this date)</span></label>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <input class="form-input" id="rv-takedown" type="date" style="max-width:180px;">
+                  <button class="btn btn-sm" type="button" onclick="setTakedown(30)">+30 days</button>
+                  <button class="btn btn-sm" type="button" onclick="setTakedown(null)">Clear</button>
+                  <span style="font-size:11px;color:var(--text-muted);">Leave blank for evergreen articles.</span>
+                </div>
+              </div>
+              <div class="form-group">
                 <label class="form-label">Article Body — edit directly</label>
                 <div class="editor-wrap">
                   <div class="editor-toolbar">
@@ -389,6 +400,12 @@
         <!-- ALL ARTICLES -->
         <div id="view-articles" class="view">
           <div id="all-articles-list"><div class="loading">Loading...</div></div>
+        </div>
+
+        <!-- RECYCLE BIN -->
+        <div id="view-trash" class="view">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">Articles in the bin are permanently deleted 30 days after being trashed. Restore returns an article to Archived (it does not go back on the live site until republished).</div>
+          <div id="trash-list"><div class="loading">Loading...</div></div>
         </div>
 
         <!-- ANALYTICS -->
@@ -728,6 +745,7 @@ const NAV_CONFIG = {
     {id:'edash', label:'Dashboard', icon:'▪', badge:true},
     {id:'review', label:'Review Queue', icon:'✓'},
     {id:'articles', label:'All Articles', icon:'≡'},
+    {id:'trash', label:'Recycle Bin', icon:'♻'},
     {id:'analytics', label:'Writing Analytics', icon:'◎'},
     {id:'assignments', label:'Deadlines', icon:'◷'},
     {id:'passwd', label:'Change Password', icon:'🔑'},
@@ -736,6 +754,7 @@ const NAV_CONFIG = {
     {id:'edash', label:'Dashboard', icon:'▪', badge:true},
     {id:'review', label:'Review Queue', icon:'✓'},
     {id:'articles', label:'All Articles', icon:'≡'},
+    {id:'trash', label:'Recycle Bin', icon:'♻'},
     {id:'analytics', label:'Writing Analytics', icon:'◎'},
     {id:'assignments', label:'Assignments', icon:'◷'},
     {id:'staff', label:'Staff Manager', icon:'◈'},
@@ -765,7 +784,7 @@ function buildUserPanel(user) {
 
 const VIEW_TITLES = {
   rdash:'My Dashboard', write:'Write Article', edash:'Dashboard',
-  review:'Review Article', articles:'All Articles', analytics:'Writing Analytics',
+  review:'Review Article', articles:'All Articles', trash:'Recycle Bin', analytics:'Writing Analytics',
   staff:'Staff Manager', assignments:'Assignments & Deadlines',
   passwd:'Change Password'
 };
@@ -792,6 +811,7 @@ function showView(id) {
   if (id === 'rdash') loadReporterDash();
   if (id === 'edash') loadEditorDash();
   if (id === 'articles') loadAllArticles();
+  if (id === 'trash') loadTrash();
   if (id === 'analytics') loadAnalytics();
   if (id === 'staff') loadStaff();
   if (id === 'assignments') loadAssignmentsMgr();
@@ -984,6 +1004,7 @@ async function openReview(id) {
   document.getElementById('rv-hed').value = data.headline || '';
   document.getElementById('rv-dek').value = data.dek || '';
   document.getElementById('rv-photo').value = data.photo_url || '';
+  document.getElementById('rv-takedown').value = data.takedown_at ? data.takedown_at.slice(0,10) : '';
   document.getElementById('rv-body').innerHTML = data.body || '';
   document.getElementById('rv-notes-thread').innerHTML = data.editor_notes
     ? `<div class="note-item editor-note"><div class="note-meta"><strong>Previous notes</strong></div><div class="note-text">${data.editor_notes}</div></div>`
@@ -1012,6 +1033,8 @@ async function publishArticle() {
   const dek  = document.getElementById('rv-dek').value.trim();
   const body = document.getElementById('rv-body').innerHTML;
   const photo_url = (document.getElementById('rv-photo') ? document.getElementById('rv-photo').value.trim() : '');
+  const takedownVal = (document.getElementById('rv-takedown') ? document.getElementById('rv-takedown').value : '');
+  const takedown_at = takedownVal ? new Date(takedownVal + 'T23:59:00').toISOString() : null;
 
   // Pull full article record so we have author_name, section, etc.
   const { data: article } = await sb.from('articles').select('*').eq('id', currentArticleId).single();
@@ -1029,6 +1052,7 @@ async function publishArticle() {
       headline: hed, dek: dek, body: body, photo_url: photo_url,
       status: 'published',
       published_at: new Date().toISOString(),
+      takedown_at: takedown_at,
       github_path: path
     }).eq('id', currentArticleId);
     showToast('review-toast',
@@ -1070,7 +1094,7 @@ async function archiveArticle(id, headline, githubPath) {
     if (githubPath) {
       await deleteFromGitHub(githubPath, headline);
     }
-    await sb.from('articles').update({ status: 'archived' }).eq('id', id);
+    await sb.from('articles').update({ status: 'archived', takedown_at: null }).eq('id', id);
     showToast('articles-toast', `"${headline}" archived and removed from site.`, 'success');
     loadAllArticles();
   } catch (err) {
@@ -1090,6 +1114,7 @@ async function republishArticle(id) {
     await sb.from('articles').update({
       status: 'published',
       published_at: new Date().toISOString(),
+      takedown_at: null,
       github_path: path
     }).eq('id', id);
     showToast('articles-toast', `"${article.headline}" is live again.`, 'success');
@@ -1099,21 +1124,75 @@ async function republishArticle(id) {
   }
 }
 
-async function deleteArticle(id, headline) {
-  if (!confirm(`Permanently delete "${headline}"? This cannot be undone.`)) return;
+async function trashArticle(id, headline) {
+  if (!confirm(`Move "${headline}" to the Recycle Bin? It will be permanently deleted after 30 days.`)) return;
   try {
-    await sb.from('articles').delete().eq('id', id);
-    showToast('articles-toast', `"${headline}" permanently deleted.`, 'success');
+    await sb.from('articles').update({ status: 'trashed', trashed_at: new Date().toISOString(), takedown_at: null }).eq('id', id);
+    showToast('articles-toast', `"${headline}" moved to the Recycle Bin.`, 'success');
     loadAllArticles();
   } catch(err) {
     showToast('articles-toast', `Error: ${err.message}`, 'error');
   }
 }
 
+async function restoreArticle(id, headline) {
+  try {
+    await sb.from('articles').update({ status: 'archived', trashed_at: null }).eq('id', id);
+    showToast('trash-toast', `"${headline}" restored to Archived.`, 'success');
+    loadTrash();
+  } catch(err) {
+    showToast('trash-toast', `Error: ${err.message}`, 'error');
+  }
+}
+
+async function deleteForever(id, headline) {
+  if (!confirm(`Permanently delete "${headline}"? This cannot be undone.`)) return;
+  try {
+    await sb.from('articles').delete().eq('id', id);
+    showToast('trash-toast', `"${headline}" permanently deleted.`, 'success');
+    loadTrash();
+  } catch(err) {
+    showToast('trash-toast', `Error: ${err.message}`, 'error');
+  }
+}
+
+function setTakedown(days) {
+  const input = document.getElementById('rv-takedown');
+  if (days === null) { input.value = ''; return; }
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  input.value = d.toISOString().slice(0,10);
+}
+
+async function loadTrash() {
+  const { data } = await sb.from('articles').select('*').eq('status','trashed').order('trashed_at', {ascending:false});
+  const list = document.getElementById('trash-list');
+  if (!data || data.length === 0) { list.innerHTML = '<div class="empty">Recycle Bin is empty.</div>'; return; }
+  list.innerHTML = `<div class="toast toast-success" id="trash-toast"></div>
+    <div class="section-div">Recycle Bin (${data.length})</div>` +
+    data.map(a => {
+      const safeHed = (a.headline||'').replace(/'/g,"\\'");
+      const trashedDate = a.trashed_at ? new Date(a.trashed_at) : new Date();
+      const daysLeft = Math.max(0, 30 - Math.floor((Date.now() - trashedDate.getTime()) / 86400000));
+      const urgency = daysLeft <= 7 ? 'var(--danger)' : 'var(--text-muted)';
+      return `<div class="queue-item">
+        <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
+        <div class="q-info">
+          <div class="q-hed">${a.headline || 'Untitled'}</div>
+          <div class="q-meta">${a.author_name} · ${a.section||'—'} · trashed ${formatDate(a.trashed_at)} · <span style="color:${urgency};font-weight:500;">auto-deletes in ${daysLeft} day${daysLeft===1?'':'s'}</span></div>
+        </div>
+        <div class="q-actions">
+          <button class="btn btn-sm btn-success" onclick="restoreArticle('${a.id}','${safeHed}')">Restore</button>
+          <button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="deleteForever('${a.id}','${safeHed}')">Delete Forever</button>
+        </div>
+      </div>`;
+    }).join('');
+}
+
 // ── ALL ARTICLES ──────────────────────────────────────────────────────────────
 
 async function loadAllArticles() {
-  const { data } = await sb.from('articles').select('*').order('created_at', {ascending:false});
+  const { data } = await sb.from('articles').select('*').neq('status','trashed').order('created_at', {ascending:false});
   const list = document.getElementById('all-articles-list');
   if (!data || data.length === 0) { list.innerHTML = '<div class="empty">No articles yet.</div>'; return; }
   const isEditor = currentUser.role === 'editor' || currentUser.role === 'adviser';
@@ -1131,14 +1210,14 @@ async function loadAllArticles() {
           if (a.github_path) actionBtn += ` <a class="btn btn-sm" href="https://blueandwhitewhs.com/${a.github_path}" target="_blank" rel="noopener">View ↗</a>`;
         } else if (a.status === 'archived') {
           const safeHedArc = (a.headline||'').replace(/'/g,"\'");
-          actionBtn = `<button class="btn btn-sm btn-success" onclick="republishArticle('${a.id}')">Republish</button> <button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="deleteArticle('${a.id}','${safeHedArc}')">Delete</button>`;
+          actionBtn = `<button class="btn btn-sm btn-success" onclick="republishArticle('${a.id}')">Republish</button> <button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="trashArticle('${a.id}','${safeHedArc}')">♻ Recycle</button>`;
         }
       }
       return `<div class="queue-item">
         <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
         <div class="q-info">
           <div class="q-hed">${a.headline || 'Untitled draft'}</div>
-          <div class="q-meta">${a.author_name} · ${a.section||'—'} · ${formatDate(a.created_at)}</div>
+          <div class="q-meta">${a.author_name} · ${a.section||'—'} · ${formatDate(a.created_at)}${a.status==='published' && a.takedown_at ? ` · <span style=\"color:var(--warn);font-weight:500;\">comes down ${formatDate(a.takedown_at)}</span>` : ''}</div>
         </div>
         <span class="status-pill s-${a.status}">${a.status}</span>
         <div class="q-actions">${actionBtn}</div>
