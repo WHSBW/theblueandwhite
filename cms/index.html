@@ -417,6 +417,10 @@
         <!-- STAFF MANAGER (adviser only) -->
         <div id="view-staff" class="view">
           <div class="toast toast-success" id="staff-toast"></div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+            <button class="btn btn-primary" id="publish-staff-btn" onclick="publishStaffPage()">⌂ Publish Staff Page</button>
+            <span style="font-size:12px;color:var(--text-muted);">Regenerates blueandwhitewhs.com/staff.html from the roster below. Click Profile on each person to set their title, grade, bio, and beats first.</span>
+          </div>
           <table class="staff-table">
             <thead><tr><th>Name</th><th>Student #</th><th>Role</th><th>Section</th><th>Actions</th></tr></thead>
             <tbody id="staff-tbody"><tr><td colspan="5" class="loading">Loading staff...</td></tr></tbody>
@@ -514,6 +518,19 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const PUBLISHER_URL = 'https://morning-field-8e58.lauranovello0214.workers.dev/';
 
 let currentUser = null;
+let sessionToken = null;
+
+// All privileged operations go through the Worker with the session token.
+async function workerCall(payload) {
+  const res = await fetch(PUBLISHER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Object.assign({ token: sessionToken }, payload))
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
+  return data;
+}
 let currentArticleId = null;
 let sessionStart = Date.now();
 let keystrokes = 0;
@@ -664,25 +681,11 @@ function generateArticleHTML(article) {
 }
 
 async function pushToGitHub(path, content, headline) {
-  const res = await fetch(PUBLISHER_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'publish', path, content, headline })
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `Publisher error ${res.status}`);
-  return data;
+  return workerCall({ action: 'publish', path, content, headline });
 }
 
 async function deleteFromGitHub(path, headline) {
-  const res = await fetch(PUBLISHER_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'delete', path, headline })
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `Publisher error ${res.status}`);
-  return data;
+  return workerCall({ action: 'delete', path, headline });
 }
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
@@ -696,13 +699,17 @@ async function doLogin() {
   btn.disabled = true; btn.textContent = 'Signing in...';
   err.style.display = 'none';
   try {
-    const { data, error } = await sb.from('users')
-      .select('*').eq('student_number', studentNum).single();
-    if (error || !data) { showLoginError('Incorrect student number or password.'); btn.disabled=false; btn.textContent='Sign In'; return; }
-    // Simple password check — in production use bcrypt, for now plain text
-    if (data.password_hash !== password) { showLoginError('Incorrect student number or password.'); btn.disabled=false; btn.textContent='Sign In'; return; }
-    currentUser = data;
-    launchCMS(data);
+    const res = await fetch(PUBLISHER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'login', student_number: studentNum, password: password })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) { showLoginError(data.error || 'Incorrect student number or password.'); btn.disabled=false; btn.textContent='Sign In'; return; }
+    sessionToken = data.token;
+    currentUser = data.user;
+    try { sessionStorage.setItem('bw_session', JSON.stringify({ token: data.token, user: data.user })); } catch(e) {}
+    launchCMS(data.user);
   } catch(e) {
     showLoginError('Connection error. Please try again.'); btn.disabled=false; btn.textContent='Sign In';
   }
@@ -723,6 +730,9 @@ function launchCMS(user) {
 }
 
 function logout() {
+  if (sessionToken) { workerCall({ action: 'logout' }).catch(()=>{}); }
+  sessionToken = null;
+  try { sessionStorage.removeItem('bw_session'); } catch(e) {}
   currentUser = null;
   document.getElementById('cms-screen').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
@@ -1296,19 +1306,91 @@ function getRiskLevel(a) {
 
 // ── STAFF MANAGER ─────────────────────────────────────────────────────────────
 
+let staffCache = [];
+
 async function loadStaff() {
-  const { data } = await sb.from('users').select('*').order('name');
   const tbody = document.getElementById('staff-tbody');
-  if (!data || data.length === 0) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No staff yet. Add your first student below.</td></tr>'; return; }
+  let data;
+  try {
+    const res = await workerCall({ action: 'staff_list' });
+    data = res.staff;
+  } catch(err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty">Error loading staff: ${err.message}</td></tr>`;
+    return;
+  }
+  staffCache = data || [];
+  if (!staffCache.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No staff yet. Add your first student below.</td></tr>'; return; }
   const roleClass = {adviser:'role-adviser',editor:'role-editor',reporter:'role-reporter'};
-  tbody.innerHTML = data.map(u => `
+  tbody.innerHTML = staffCache.map(u => {
+    const hidden = u.show_on_page === false ? ' <span style="font-size:10px;color:var(--text-muted);">(hidden from staff page)</span>' : '';
+    const safeName = (u.name||'').replace(/'/g,"\\'");
+    return `
     <tr>
-      <td><strong>${u.name}</strong></td>
+      <td><strong>${u.name}</strong>${hidden}</td>
       <td style="font-family:monospace;font-size:12px;">${u.student_number}</td>
       <td><span class="role-pill ${roleClass[u.role]||'role-reporter'}">${u.role}</span></td>
       <td>${u.section||'—'}</td>
-      <td>${u.role !== 'adviser' ? `<button class="btn btn-sm btn-danger" onclick="removeStaff('${u.id}','${u.name}')">Remove</button>` : ''}</td>
-    </tr>`).join('');
+      <td style="white-space:nowrap;">
+        <button class="btn btn-sm" onclick="toggleProfile('${u.id}')">Profile</button>
+        ${u.role !== 'adviser' ? `<button class="btn btn-sm btn-danger" onclick="removeStaff('${u.id}','${safeName}')">Remove</button>` : ''}
+      </td>
+    </tr>
+    <tr id="profile-row-${u.id}" style="display:none;background:var(--silver-pale);">
+      <td colspan="5" style="padding:14px 16px;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:10px;">
+          <div><label class="form-label">Title on staff page</label>
+            <input class="form-input" id="pf-title-${u.id}" value="${u.title||''}" placeholder="e.g. Staff Reporter, Editor-in-Chief"></div>
+          <div><label class="form-label">Grade</label>
+            <input class="form-input" id="pf-grade-${u.id}" value="${u.grade||''}" placeholder="e.g. 11th Grade"></div>
+          <div><label class="form-label">Beats</label>
+            <input class="form-input" id="pf-beats-${u.id}" value="${u.beats||''}" placeholder="e.g. Clubs · Student Life"></div>
+          <div><label class="form-label">Staff page section</label>
+            <select class="form-input" id="pf-pagesection-${u.id}">
+              <option value="">Same as newsroom section</option>
+              <option ${u.page_section==='Leadership'?'selected':''}>Leadership</option>
+              <option ${u.page_section==='News'?'selected':''}>News</option>
+              <option ${u.page_section==='Sports'?'selected':''}>Sports</option>
+              <option ${u.page_section==='Culture'?'selected':''}>Culture</option>
+              <option ${u.page_section==='Hot Spot'?'selected':''}>Hot Spot</option>
+              <option ${u.page_section==='We Are Wharton'?'selected':''}>We Are Wharton</option>
+              <option ${u.page_section==='Editorial'?'selected':''}>Editorial</option>
+              <option ${u.page_section==='Photography'?'selected':''}>Photography</option>
+            </select></div>
+        </div>
+        <div style="margin-bottom:10px;"><label class="form-label">Short bio</label>
+          <textarea class="form-input" id="pf-bio-${u.id}" rows="2" placeholder="One or two sentences — how long on staff, what they cover.">${u.bio||''}</textarea></div>
+        <div style="display:flex;gap:12px;align-items:center;">
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="pf-show-${u.id}" ${u.show_on_page===false?'':'checked'}> Show on public staff page
+          </label>
+          <button class="btn btn-sm btn-primary" onclick="saveProfile('${u.id}')">Save Profile</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function toggleProfile(id) {
+  const row = document.getElementById('profile-row-' + id);
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+async function saveProfile(id) {
+  const fields = {
+    title: document.getElementById('pf-title-' + id).value.trim(),
+    grade: document.getElementById('pf-grade-' + id).value.trim(),
+    beats: document.getElementById('pf-beats-' + id).value.trim(),
+    page_section: document.getElementById('pf-pagesection-' + id).value,
+    bio: document.getElementById('pf-bio-' + id).value.trim(),
+    show_on_page: document.getElementById('pf-show-' + id).checked,
+  };
+  try {
+    await workerCall({ action: 'staff_update', id: id, fields: fields });
+    showToast('staff-toast', 'Profile saved. Remember to Publish Staff Page to update the site.', 'success');
+    loadStaff();
+  } catch(err) {
+    showToast('staff-toast', 'Error: ' + err.message, 'error');
+  }
 }
 
 async function addStaff() {
@@ -1318,8 +1400,11 @@ async function addStaff() {
   const role = document.getElementById('new-role').value;
   const section = document.getElementById('new-section').value;
   if (!name || !id || !pass) { alert('Please fill in name, student number, and password.'); return; }
-  const { error } = await sb.from('users').insert([{name, student_number: id, password_hash: pass, role, section}]);
-  if (error) { showToast('staff-toast', 'Error adding staff: '+error.message, 'error'); return; }
+  try {
+    await workerCall({ action: 'staff_add', name: name, student_number: id, password: pass, role: role, section: section });
+  } catch(err) {
+    showToast('staff-toast', 'Error adding staff: ' + err.message, 'error'); return;
+  }
   document.getElementById('new-name').value = '';
   document.getElementById('new-id').value = '';
   document.getElementById('new-pass').value = '';
@@ -1329,9 +1414,108 @@ async function addStaff() {
 
 async function removeStaff(id, name) {
   if (!confirm(`Remove ${name} from the newsroom? This cannot be undone.`)) return;
-  await sb.from('users').delete().eq('id', id);
-  showToast('staff-toast', `${name} removed.`, 'success');
+  try {
+    await workerCall({ action: 'staff_remove', id: id });
+    showToast('staff-toast', `${name} removed.`, 'success');
+  } catch(err) {
+    showToast('staff-toast', 'Error: ' + err.message, 'error');
+  }
   loadStaff();
+}
+
+// ── STAFF PAGE GENERATOR ─────────────────────────────────────────────────────
+
+const STAFF_PAGE_SECTIONS = [
+  { name: 'News',           slug: 'news',         cssVar: '--news' },
+  { name: 'Sports',         slug: 'sports',       cssVar: '--sports' },
+  { name: 'Culture',        slug: 'culture',      cssVar: '--culture' },
+  { name: 'Hot Spot',       slug: 'hotspot',      cssVar: '--hotspot' },
+  { name: 'We Are Wharton', slug: 'wearewharton', cssVar: '--wharton' },
+  { name: 'Editorial',      slug: 'editorial',    cssVar: '--editorial' },
+  { name: 'Photography',    slug: 'photo',        cssVar: '--navy' },
+];
+
+function escHtml(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function staffInitials(name) {
+  return (name || '?').trim().split(/\s+/).map(w => w[0]).slice(0,2).join('').toUpperCase();
+}
+
+function generateStaffHTML(template, staff) {
+  const visible = staff.filter(u => u.show_on_page !== false && u.role !== 'adviser');
+  const leadership = visible.filter(u => u.page_section === 'Leadership');
+  const avatarColors = ['#1A2E4A', '#3A1A1A', '#1A3A1A', '#3A2E1A', '#2A1A3A'];
+
+  const leadershipHTML = leadership.length ? leadership.map((u, i) => `
+      <div class="leader-card">
+        <div class="leader-avatar-initials" style="background:${avatarColors[i % avatarColors.length]};">${staffInitials(u.name)}</div>
+        <div class="leader-name">${escHtml(u.name)}</div>
+        <div class="leader-role">${escHtml(u.title || 'Editor')}</div>
+        <div class="leader-grade">${escHtml(u.grade || '')}</div>
+        ${u.bio ? `<div class="leader-bio">${escHtml(u.bio)}</div>` : ''}
+      </div>`).join('\n') : '\n      <!-- No leadership assigned yet — set "Staff page section" to Leadership in the CMS Staff Manager -->\n';
+
+  const unplaced = [];
+  const rosterHTML = STAFF_PAGE_SECTIONS.map(sec => {
+    const members = visible.filter(u => (u.page_section || u.section) === sec.name);
+    if (!members.length) return '';
+    const cards = members.map(u => `
+      <div class="staff-card">
+        <div class="staff-photo"><div class="staff-photo-initials">${staffInitials(u.name)}</div></div>
+        <div class="staff-name">${escHtml(u.name)}</div>
+        <div class="staff-role" style="color:var(${sec.cssVar});">${escHtml(u.title || (u.role === 'editor' ? 'Section Editor' : 'Staff Reporter'))}</div>
+        <div class="staff-grade">${escHtml(u.grade || '')}</div>
+        ${u.bio ? `<div class="staff-bio">${escHtml(u.bio)}</div>` : ''}
+        ${u.beats ? `<span class="staff-beat" style="background:#EEF4FF;color:var(${sec.cssVar});">${escHtml(u.beats)}</span>` : ''}
+      </div>`).join('\n');
+    return `
+  <div class="staff-section" data-section="${sec.slug}">
+    <div class="staff-section-header">
+      <div class="staff-section-title" style="color:var(${sec.cssVar});">${sec.name}</div>
+      <div class="staff-section-line"></div>
+      <div class="staff-section-count">— ${members.length} ${members.length === 1 ? 'member' : 'members'}</div>
+    </div>
+    <div class="staff-grid">
+${cards}
+    </div>
+  </div>`;
+  }).join('\n');
+
+  visible.forEach(u => {
+    const sec = u.page_section || u.section;
+    if (sec !== 'Leadership' && !STAFF_PAGE_SECTIONS.some(x => x.name === sec)) unplaced.push(u.name);
+  });
+
+  let out = template;
+  out = out.replace(/<!-- BW:LEADERSHIP:START -->[\s\S]*?<!-- BW:LEADERSHIP:END -->/,
+    '<!-- BW:LEADERSHIP:START -->' + leadershipHTML + '<!-- BW:LEADERSHIP:END -->');
+  out = out.replace(/<!-- BW:ROSTER:START -->[\s\S]*?<!-- BW:ROSTER:END -->/,
+    '<!-- BW:ROSTER:START -->' + rosterHTML + '\n  <!-- BW:ROSTER:END -->');
+  return { html: out, unplaced: unplaced };
+}
+
+async function publishStaffPage() {
+  const btn = document.getElementById('publish-staff-btn');
+  btn.disabled = true; btn.textContent = 'Publishing...';
+  try {
+    const res = await workerCall({ action: 'staff_list' });
+    const tplRes = await fetch('https://blueandwhitewhs.com/staff.html?nocache=' + Date.now());
+    if (!tplRes.ok) throw new Error('Could not load the current staff page.');
+    const template = await tplRes.text();
+    if (template.indexOf('BW:ROSTER:START') === -1) {
+      throw new Error('The live staff.html has no generation markers. Push the templated staff.html first.');
+    }
+    const gen = generateStaffHTML(template, res.staff);
+    await workerCall({ action: 'publish_page', page: 'staff.html', content: gen.html });
+    let msg = 'Staff page published. Live in about a minute.';
+    if (gen.unplaced.length) msg += ` Note — not shown (no matching page section): ${gen.unplaced.join(', ')}.`;
+    showToast('staff-toast', msg, 'success');
+  } catch(err) {
+    showToast('staff-toast', 'Error: ' + err.message, 'error');
+  }
+  btn.disabled = false; btn.textContent = '⌂ Publish Staff Page';
 }
 
 // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
@@ -1537,22 +1721,10 @@ async function changePassword() {
     showToast('passwd-toast', 'New passwords do not match.', 'error'); return;
   }
 
-  // Verify current password against Supabase
-  const { data: user } = await sb.from('users')
-    .select('id, password_hash')
-    .eq('id', currentUser.id)
-    .single();
-
-  if (!user || user.password_hash !== current) {
-    showToast('passwd-toast', 'Current password is incorrect.', 'error'); return;
-  }
-
-  const { error } = await sb.from('users')
-    .update({ password_hash: next })
-    .eq('id', currentUser.id);
-
-  if (error) {
-    showToast('passwd-toast', 'Error saving password. Try again.', 'error'); return;
+  try {
+    await workerCall({ action: 'change_password', current: current, next: next });
+  } catch(err) {
+    showToast('passwd-toast', err.message, 'error'); return;
   }
 
   document.getElementById('pw-current').value = '';
@@ -1565,6 +1737,19 @@ async function changePassword() {
 document.getElementById('l-pass').addEventListener('keydown', e => {
   if (e.key === 'Enter') doLogin();
 });
+
+// ── SESSION RESTORE ───────────────────────────────────────────────────────────
+// Survive a page refresh: rehydrate the session saved at login.
+(function() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('bw_session') || 'null');
+    if (saved && saved.token && saved.user) {
+      sessionToken = saved.token;
+      currentUser = saved.user;
+      launchCMS(saved.user);
+    }
+  } catch(e) { /* fall through to login screen */ }
+})();
 </script>
 </body>
 </html>
