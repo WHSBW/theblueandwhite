@@ -1289,8 +1289,8 @@ async function loadAllArticles() {
         } else if (a.status === 'archived') {
           actionBtn = `<button class="btn btn-sm btn-success" onclick="republishArticle('${a.id}')">Republish</button> <button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="trashArticle('${a.id}','${safeHedAny}')">♻ Recycle</button>`;
         } else {
-          // draft / returned — anything else can always be recycled
-          actionBtn = `<button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="trashArticle('${a.id}','${safeHedAny}')">♻ Recycle</button>`;
+          // draft / returned — open in review (peek, leave notes, return, or publish) or recycle
+          actionBtn = `<button class="btn btn-sm" onclick="openReview('${a.id}')">Review</button> <button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="trashArticle('${a.id}','${safeHedAny}')">♻ Recycle</button>`;
         }
       }
       return `<div class="queue-item">
