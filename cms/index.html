@@ -1214,16 +1214,19 @@ async function loadAllArticles() {
     data.map(a => {
       let actionBtn = '';
       if (isEditor) {
+        const safeHedAny = (a.headline||'Untitled').replace(/'/g,"\\'");
         if (a.status === 'pending') {
-          actionBtn = `<button class="btn btn-sm" onclick="openReview('${a.id}')">Review</button>`;
+          actionBtn = `<button class="btn btn-sm" onclick="openReview('${a.id}')">Review</button> <button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="trashArticle('${a.id}','${safeHedAny}')">♻ Recycle</button>`;
         } else if (a.status === 'published') {
           const safeHed  = (a.headline||'').replace(/'/g,"\\'");
           const safePath = (a.github_path||'').replace(/'/g,"\\'");
           actionBtn = `<button class="btn btn-sm" onclick="openReview('${a.id}')">Edit</button> <button class="btn btn-sm btn-warn" onclick="archiveArticle('${a.id}','${safeHed}','${safePath}')">Archive</button>`;
           if (a.github_path) actionBtn += ` <a class="btn btn-sm" href="https://blueandwhitewhs.com/${a.github_path}" target="_blank" rel="noopener">View ↗</a>`;
         } else if (a.status === 'archived') {
-          const safeHedArc = (a.headline||'').replace(/'/g,"\'");
-          actionBtn = `<button class="btn btn-sm btn-success" onclick="republishArticle('${a.id}')">Republish</button> <button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="trashArticle('${a.id}','${safeHedArc}')">♻ Recycle</button>`;
+          actionBtn = `<button class="btn btn-sm btn-success" onclick="republishArticle('${a.id}')">Republish</button> <button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="trashArticle('${a.id}','${safeHedAny}')">♻ Recycle</button>`;
+        } else {
+          // draft / returned — anything else can always be recycled
+          actionBtn = `<button class="btn btn-sm" style="background:#c0392b;color:#fff;border-color:#c0392b;" onclick="trashArticle('${a.id}','${safeHedAny}')">♻ Recycle</button>`;
         }
       }
       return `<div class="queue-item">
