@@ -895,6 +895,7 @@ function initWriteView() {
   document.getElementById('w-section').value = '';
   document.getElementById('w-caption').value = '';
   document.getElementById('w-credit').value = '';
+  document.getElementById('w-photo').value = '';
   document.getElementById('returned-notes-section').style.display = 'none';
   document.getElementById('w-wc').textContent = '0 words';
   resetTracking();
@@ -903,6 +904,7 @@ function initWriteView() {
 async function loadArticleForEdit(id) {
   const data = await artRead({ where: { id: id }, single: true });
   if (!data) { alert('Could not load this article from the server. Check your connection and try again — your work has not been changed.'); return; }
+  showView('write'); // switch (and form-wipe) FIRST, then populate
   currentArticleId = id;
   document.getElementById('w-hed').value = data.headline || '';
   document.getElementById('w-dek').value = data.dek || '';
@@ -920,7 +922,6 @@ async function loadArticleForEdit(id) {
         <div class="note-text">${data.editor_notes}</div>
       </div>`;
   }
-  showView('write');
   document.getElementById('topbar-title').textContent = 'Edit Article';
   document.getElementById('topbar-actions').innerHTML =
     '<button class="btn" onclick="saveDraft()">Save Draft</button><button class="btn btn-primary" onclick="submitArticle()">Resubmit for Review</button>';
