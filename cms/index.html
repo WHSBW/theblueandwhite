@@ -1344,6 +1344,8 @@ async function loadStaff() {
             <input class="form-input" id="pf-grade-${u.id}" value="${u.grade||''}" placeholder="e.g. 11th Grade"></div>
           <div><label class="form-label">Beats</label>
             <input class="form-input" id="pf-beats-${u.id}" value="${u.beats||''}" placeholder="e.g. Clubs · Student Life"></div>
+          <div><label class="form-label">Photo URL <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+            <input class="form-input" id="pf-photo-${u.id}" value="${u.photo_url||''}" placeholder="https://... (initials shown if blank)"></div>
           <div><label class="form-label">Staff page section</label>
             <select class="form-input" id="pf-pagesection-${u.id}">
               <option value="">Same as newsroom section</option>
@@ -1381,6 +1383,7 @@ async function saveProfile(id) {
     grade: document.getElementById('pf-grade-' + id).value.trim(),
     beats: document.getElementById('pf-beats-' + id).value.trim(),
     page_section: document.getElementById('pf-pagesection-' + id).value,
+    photo_url: document.getElementById('pf-photo-' + id).value.trim(),
     bio: document.getElementById('pf-bio-' + id).value.trim(),
     show_on_page: document.getElementById('pf-show-' + id).checked,
   };
@@ -1450,7 +1453,9 @@ function generateStaffHTML(template, staff) {
 
   const leadershipHTML = leadership.length ? leadership.map((u, i) => `
       <div class="leader-card">
-        <div class="leader-avatar-initials" style="background:${avatarColors[i % avatarColors.length]};">${staffInitials(u.name)}</div>
+        ${u.photo_url
+          ? `<div class="leader-avatar"><img src="${escHtml(u.photo_url)}" alt="${escHtml(u.name)}"></div>`
+          : `<div class="leader-avatar-initials" style="background:${avatarColors[i % avatarColors.length]};">${staffInitials(u.name)}</div>`}
         <div class="leader-name">${escHtml(u.name)}</div>
         <div class="leader-role">${escHtml(u.title || 'Editor')}</div>
         <div class="leader-grade">${escHtml(u.grade || '')}</div>
@@ -1463,7 +1468,9 @@ function generateStaffHTML(template, staff) {
     if (!members.length) return '';
     const cards = members.map(u => `
       <div class="staff-card">
-        <div class="staff-photo"><div class="staff-photo-initials">${staffInitials(u.name)}</div></div>
+        <div class="staff-photo">${u.photo_url
+          ? `<img src="${escHtml(u.photo_url)}" alt="${escHtml(u.name)}">`
+          : `<div class="staff-photo-initials">${staffInitials(u.name)}</div>`}</div>
         <div class="staff-name">${escHtml(u.name)}</div>
         <div class="staff-role" style="color:var(${sec.cssVar});">${escHtml(u.title || (u.role === 'editor' ? 'Section Editor' : 'Staff Reporter'))}</div>
         <div class="staff-grade">${escHtml(u.grade || '')}</div>
