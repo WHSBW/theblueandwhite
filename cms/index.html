@@ -444,7 +444,7 @@
         <div id="view-assignments" class="view">
           <div class="toast toast-success" id="assign-toast"></div>
           <div id="assignments-mgr-list"><div class="loading">Loading...</div></div>
-          <div class="section-div" style="margin-top:24px;">New Assignment</div>
+          <div class="section-div" style="margin-top:24px;" id="dl-form-label">New Assignment</div>
           <div class="form-grid">
             <div class="form-group">
               <label class="form-label">Title</label>
@@ -477,7 +477,8 @@
             <label class="form-label">Instructions (optional)</label>
             <textarea class="form-input" id="dl-instructions" style="min-height:80px;resize:vertical;" placeholder="Any specific requirements or notes for students..."></textarea>
           </div>
-          <button class="btn btn-primary" onclick="createAssignment()">Create Assignment</button>
+          <button class="btn btn-primary" id="dl-save-btn" onclick="createAssignment()">Create Assignment</button>
+          <button class="btn" id="dl-cancel-btn" style="display:none;margin-left:8px;" onclick="cancelAssignmentEdit()">Cancel Edit</button>
         </div>
 
         <!-- PASSWORD CHANGE (all roles) -->
@@ -840,12 +841,16 @@ function showView(id) {
 // ── REPORTER DASHBOARD ────────────────────────────────────────────────────────
 
 async function loadReporterDash() {
+  // Load my articles first so assignment cards can show progress
+  const articles = await artRead({ where: { author_id_self: true }, order: 'created_at', dir: 'desc' });
+
   // Load assignments
   let assignments = [];
   try {
     const ar = await workerCall({ action: 'assign_list' });
     assignments = (ar.rows || []).filter(a => a.assigned_to === 'all' || a.assigned_to === currentUser.section);
   } catch(e) { console.error('assignments load failed:', e.message); }
+  assignmentsCache = assignments;
   const aList = document.getElementById('assignments-list');
   if (!assignments || assignments.length === 0) {
     aList.innerHTML = '<div class="empty">No assignments right now.</div>';
@@ -856,18 +861,29 @@ async function loadReporterDash() {
       const diff = Math.ceil((due - now) / (1000*60*60*24));
       const dueClass = diff < 0 ? 'due-late' : diff <= 2 ? 'due-soon' : 'due-ok';
       const dueText = diff < 0 ? `${Math.abs(diff)}d late` : diff === 0 ? 'Due today' : `Due in ${diff}d`;
+      const safeTitle = (a.title||'').replace(/'/g,"\\'");
+      const mine = (articles || []).find(ar => ar.assignment_id === a.id && ar.status !== 'trashed');
+      let statusPill = '', actionBtn = '';
+      if (!mine) {
+        actionBtn = `<button class="btn btn-sm btn-primary" onclick="startArticleFromAssignment('${a.id}','${safeTitle}')">Write</button>`;
+      } else {
+        const label = mine.status === 'published' ? 'Published ✓'
+          : mine.status === 'pending' ? 'Submitted ✓'
+          : mine.status === 'returned' ? 'Returned — see notes'
+          : 'Draft in progress';
+        statusPill = `<span class="status-pill s-${mine.status}" style="margin-right:8px;">${label}</span>`;
+        actionBtn = `<button class="btn btn-sm" onclick="loadArticleForEdit('${mine.id}')">Open</button>`;
+      }
       return `<div class="assign-card">
         <div class="assign-info">
           <div class="assign-title">${a.title}</div>
-          <div class="assign-meta">${a.assigned_to === 'all' ? 'Whole class' : a.section+' section'} · ${a.min_words ? a.min_words+' words min' : 'No word minimum'}</div>
+          <div class="assign-meta">${a.assigned_to === 'all' ? 'Whole class' : a.assigned_to+' section'} · ${a.min_words ? a.min_words+' words min' : 'No word minimum'}</div>
         </div>
         <span class="due-badge ${dueClass}">${dueText}</span>
-        <button class="btn btn-sm btn-primary" onclick="startArticleFromAssignment('${a.id}','${a.title}')">Write</button>
+        ${statusPill}${actionBtn}
       </div>`;
     }).join('');
   }
-  // Load my articles
-  const articles = await artRead({ where: { author_id_self: true }, order: 'created_at', dir: 'desc' });
   const mList = document.getElementById('my-articles-list');
   if (!articles || articles.length === 0) {
     mList.innerHTML = '<div class="empty">No articles yet. Hit Write Article to get started.</div>';
@@ -887,6 +903,17 @@ async function loadReporterDash() {
 
 // ── WRITE / EDIT ──────────────────────────────────────────────────────────────
 
+let assignmentsCache = [];
+
+function populateAssignmentDropdown(selectedId) {
+  const sel = document.getElementById('w-assignment');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— Free write —</option>' +
+    assignmentsCache.map(a => `<option value="${a.id}">${escHtml(a.title)}</option>`).join('');
+  sel.value = selectedId || '';
+  if (sel.value !== (selectedId || '')) sel.value = ''; // assignment no longer exists
+}
+
 function initWriteView() {
   currentArticleId = null;
   document.getElementById('w-hed').value = '';
@@ -896,6 +923,7 @@ function initWriteView() {
   document.getElementById('w-caption').value = '';
   document.getElementById('w-credit').value = '';
   document.getElementById('w-photo').value = '';
+  populateAssignmentDropdown('');
   document.getElementById('returned-notes-section').style.display = 'none';
   document.getElementById('w-wc').textContent = '0 words';
   resetTracking();
@@ -913,6 +941,7 @@ async function loadArticleForEdit(id) {
   document.getElementById('w-caption').value = data.photo_caption || '';
   document.getElementById('w-credit').value = data.photo_credit || '';
   document.getElementById('w-photo').value = data.photo_url || '';
+  populateAssignmentDropdown(data.assignment_id || '');
   updateWC('w-body','w-wc');
   if (data.editor_notes) {
     const notes = parseEditorNotes(data.editor_notes);
@@ -927,9 +956,9 @@ async function loadArticleForEdit(id) {
 }
 
 function startArticleFromAssignment(assignId, title) {
-  initWriteView();
+  showView('write'); // wipes the form via initWriteView — populate AFTER
   document.getElementById('w-hed').value = title;
-  showView('write');
+  populateAssignmentDropdown(assignId);
 }
 
 async function saveDraft() {
@@ -975,7 +1004,8 @@ function getArticlePayload(status) {
     keystroke_count: keystrokes,
     paste_events: pastes,
     time_on_page: Math.floor((Date.now() - sessionStart) / 1000),
-    session_count: parseInt(document.getElementById('ls-sessions').textContent) || 1
+    session_count: parseInt(document.getElementById('ls-sessions').textContent) || 1,
+    assignment_id: (document.getElementById('w-assignment') && document.getElementById('w-assignment').value) || null
   };
 }
 
@@ -1565,9 +1595,20 @@ async function publishStaffPage() {
 
 // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
 
+let assignmentsMgrCache = [];
+let editingAssignmentId = null;
+
+function toLocalDT(iso) {
+  const d = new Date(iso);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 async function loadAssignmentsMgr() {
   let data = [];
   try { data = (await workerCall({ action: 'assign_list' })).rows; } catch(e) { console.error(e.message); }
+  assignmentsMgrCache = data || [];
+  assignmentsCache = data || [];
   const list = document.getElementById('assignments-mgr-list');
   if (!data || data.length === 0) { list.innerHTML = '<div class="empty">No assignments yet. Create one below.</div>'; return; }
   list.innerHTML = `<div class="section-div">Current Assignments</div>` + data.map(a => {
@@ -1582,14 +1623,10 @@ async function loadAssignmentsMgr() {
         <div class="assign-meta">${a.assigned_to === 'all' ? 'Whole class' : a.assigned_to} · ${a.min_words||0} words min</div>
       </div>
       <span class="due-badge ${dueClass}">${dueText}</span>
+      <button class="btn btn-sm" onclick="editAssignment('${a.id}')">✎ Edit</button>
       <button class="btn btn-sm btn-danger" onclick="deleteAssignment('${a.id}')">Delete</button>
     </div>`;
   }).join('');
-  // Also populate reporter assignment select
-  const sel = document.getElementById('w-assignment');
-  if (sel) {
-    sel.innerHTML = '<option value="">— Free write —</option>' + data.map(a => `<option value="${a.id}">${a.title}</option>`).join('');
-  }
 }
 
 async function createAssignment() {
@@ -1599,17 +1636,48 @@ async function createAssignment() {
   const minWords = parseInt(document.getElementById('dl-words').value) || 0;
   const instructions = document.getElementById('dl-instructions').value.trim();
   if (!title || !date) { alert('Please add a title and due date.'); return; }
+  const fields = {
+    title: title, due_date: new Date(date).toISOString(),
+    assigned_to: assignTo, min_words: minWords, instructions: instructions
+  };
   try {
-    await workerCall({ action: 'assign_add', fields: {
-      title: title, due_date: new Date(date).toISOString(),
-      assigned_to: assignTo, min_words: minWords, instructions: instructions
-    }});
+    if (editingAssignmentId) {
+      await workerCall({ action: 'assign_update', id: editingAssignmentId, fields: fields });
+      showToast('assign-toast', `Assignment "${title}" updated.`, 'success');
+    } else {
+      await workerCall({ action: 'assign_add', fields: fields });
+      showToast('assign-toast', `Assignment "${title}" created.`, 'success');
+    }
   } catch(err) { showToast('assign-toast', 'Error: ' + err.message, 'error'); return; }
+  cancelAssignmentEdit();
+  loadAssignmentsMgr();
+}
+
+function editAssignment(id) {
+  const a = assignmentsMgrCache.find(x => String(x.id) === String(id));
+  if (!a) return;
+  editingAssignmentId = id;
+  document.getElementById('dl-title').value = a.title || '';
+  document.getElementById('dl-date').value = a.due_date ? toLocalDT(a.due_date) : '';
+  document.getElementById('dl-assign').value = a.assigned_to || 'all';
+  document.getElementById('dl-words').value = a.min_words || '';
+  document.getElementById('dl-instructions').value = a.instructions || '';
+  document.getElementById('dl-save-btn').textContent = 'Save Changes';
+  document.getElementById('dl-cancel-btn').style.display = '';
+  document.getElementById('dl-form-label').textContent = 'Editing: ' + (a.title || 'assignment');
+  document.getElementById('dl-title').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function cancelAssignmentEdit() {
+  editingAssignmentId = null;
   document.getElementById('dl-title').value = '';
   document.getElementById('dl-date').value = '';
+  document.getElementById('dl-assign').value = 'all';
+  document.getElementById('dl-words').value = '';
   document.getElementById('dl-instructions').value = '';
-  showToast('assign-toast', `Assignment "${title}" created.`, 'success');
-  loadAssignmentsMgr();
+  document.getElementById('dl-save-btn').textContent = 'Create Assignment';
+  document.getElementById('dl-cancel-btn').style.display = 'none';
+  document.getElementById('dl-form-label').textContent = 'New Assignment';
 }
 
 async function deleteAssignment(id) {
