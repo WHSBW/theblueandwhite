@@ -902,7 +902,7 @@ function initWriteView() {
 
 async function loadArticleForEdit(id) {
   const data = await artRead({ where: { id: id }, single: true });
-  if (!data) return;
+  if (!data) { alert('Could not load this article from the server. Check your connection and try again — your work has not been changed.'); return; }
   currentArticleId = id;
   document.getElementById('w-hed').value = data.headline || '';
   document.getElementById('w-dek').value = data.dek || '';
@@ -935,6 +935,9 @@ function startArticleFromAssignment(assignId, title) {
 async function saveDraft() {
   const payload = getArticlePayload('draft');
   if (!payload) return;
+  if (currentArticleId && !(payload.body||'').replace(/<[^>]*>/g,'').trim()) {
+    showToast('write-toast', 'Body is empty — not saving over your existing article.', 'error'); return;
+  }
   try {
     const r = await workerCall({ action: 'art_save', id: currentArticleId || undefined, fields: payload });
     if (!currentArticleId) currentArticleId = r.id;
@@ -1082,11 +1085,12 @@ async function returnArticle() {
   if (!currentArticleId) return;
   const notes = document.getElementById('rv-note-input').value.trim();
   if (!notes) { alert('Add a note for the reporter before returning.'); return; }
-  await workerCall({ action: 'art_admin', id: currentArticleId, fields: {
-    headline: document.getElementById('rv-hed').value.trim(),
-    body: document.getElementById('rv-body').innerHTML,
-    editor_notes: notes, status: 'returned'
-  }});
+  const rvHed = document.getElementById('rv-hed').value.trim();
+  const rvBody = document.getElementById('rv-body').innerHTML;
+  const fields = { editor_notes: notes, status: 'returned' };
+  if (rvHed) fields.headline = rvHed;
+  if ((rvBody||'').replace(/<[^>]*>/g,'').trim()) fields.body = rvBody;
+  await workerCall({ action: 'art_admin', id: currentArticleId, fields: fields });
   showToast('review-toast', 'Article returned to reporter with your notes.', 'success');
   setTimeout(() => showView('edash'), 2000);
 }
@@ -1670,6 +1674,8 @@ async function doAutosave() {
   if (!hedEl || !hedEl.value.trim()) return;
   const payload = getArticlePayload('draft');
   if (!payload) return;
+  // Never autosave an empty body over an existing article
+  if (currentArticleId && !(payload.body||'').replace(/<[^>]*>/g,'').trim()) return;
   const ind = document.getElementById('autosave-indicator');
   if (ind) ind.textContent = 'Saving…';
   try {
