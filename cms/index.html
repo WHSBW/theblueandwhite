@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Newsroom CMS | The Blue &amp; White</title>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500&family=Source+Serif+4:ital,wght@0,300;0,400;1,300&display=swap');
     *{box-sizing:border-box;margin:0;padding:0;}
@@ -508,9 +507,8 @@
 </div>
 
 <script>
-const SUPABASE_URL = 'https://cybjclqcdmrjhoaoiund.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_G-U4_7cECYwC3c1Sa2MqWQ_9NHN-7_g';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// v4: This file contains NO database credentials. Every data operation goes
+// through the Cloudflare Worker with the user's session token.
 
 // ── PUBLISHER CONFIG ──────────────────────────────────────────────────────────
 // The token lives in Cloudflare — never in this file.
@@ -519,6 +517,17 @@ const PUBLISHER_URL = 'https://morning-field-8e58.lauranovello0214.workers.dev/'
 
 let currentUser = null;
 let sessionToken = null;
+
+// Article reads via the Worker; returns row (single) or rows array.
+async function artRead(opts) {
+  try {
+    const r = await workerCall(Object.assign({ action: 'art_read' }, opts));
+    return opts && opts.single ? r.row : r.rows;
+  } catch (e) {
+    console.error('art_read failed:', e.message);
+    return opts && opts.single ? null : [];
+  }
+}
 
 // All privileged operations go through the Worker with the session token.
 async function workerCall(payload) {
@@ -832,8 +841,11 @@ function showView(id) {
 
 async function loadReporterDash() {
   // Load assignments
-  const { data: assignments } = await sb.from('assignments')
-    .select('*').or(`assigned_to.eq.all,assigned_to.eq.${currentUser.section}`).order('due_date');
+  let assignments = [];
+  try {
+    const ar = await workerCall({ action: 'assign_list' });
+    assignments = (ar.rows || []).filter(a => a.assigned_to === 'all' || a.assigned_to === currentUser.section);
+  } catch(e) { console.error('assignments load failed:', e.message); }
   const aList = document.getElementById('assignments-list');
   if (!assignments || assignments.length === 0) {
     aList.innerHTML = '<div class="empty">No assignments right now.</div>';
@@ -855,8 +867,7 @@ async function loadReporterDash() {
     }).join('');
   }
   // Load my articles
-  const { data: articles } = await sb.from('articles')
-    .select('*').eq('author_id', currentUser.id).order('created_at', {ascending:false});
+  const articles = await artRead({ where: { author_id_self: true }, order: 'created_at', dir: 'desc' });
   const mList = document.getElementById('my-articles-list');
   if (!articles || articles.length === 0) {
     mList.innerHTML = '<div class="empty">No articles yet. Hit Write Article to get started.</div>';
@@ -890,7 +901,7 @@ function initWriteView() {
 }
 
 async function loadArticleForEdit(id) {
-  const { data } = await sb.from('articles').select('*').eq('id', id).single();
+  const data = await artRead({ where: { id: id }, single: true });
   if (!data) return;
   currentArticleId = id;
   document.getElementById('w-hed').value = data.headline || '';
@@ -925,12 +936,8 @@ async function saveDraft() {
   const payload = getArticlePayload('draft');
   if (!payload) return;
   try {
-    if (currentArticleId) {
-      await sb.from('articles').update(payload).eq('id', currentArticleId);
-    } else {
-      const { data } = await sb.from('articles').insert([{...payload, author_id: currentUser.id, author_name: currentUser.name}]).select().single();
-      if (data) currentArticleId = data.id;
-    }
+    const r = await workerCall({ action: 'art_save', id: currentArticleId || undefined, fields: payload });
+    if (!currentArticleId) currentArticleId = r.id;
     showToast('write-toast', 'Draft saved.', 'success');
   } catch(e) { showToast('write-toast', 'Save failed. Try again.', 'error'); }
 }
@@ -940,12 +947,8 @@ async function submitArticle() {
   if (!payload) return;
   payload.submitted_at = new Date().toISOString();
   try {
-    if (currentArticleId) {
-      await sb.from('articles').update(payload).eq('id', currentArticleId);
-    } else {
-      const { data } = await sb.from('articles').insert([{...payload, author_id: currentUser.id, author_name: currentUser.name}]).select().single();
-      if (data) currentArticleId = data.id;
-    }
+    const r = await workerCall({ action: 'art_save', id: currentArticleId || undefined, fields: payload });
+    if (!currentArticleId) currentArticleId = r.id;
     showToast('write-toast', 'Submitted for review! Your editor has been notified.', 'success');
     setTimeout(() => showView('rdash'), 2000);
   } catch(e) { showToast('write-toast', 'Submit failed. Try again.', 'error'); }
@@ -976,13 +979,13 @@ function getArticlePayload(status) {
 // ── EDITOR DASHBOARD ──────────────────────────────────────────────────────────
 
 async function loadEditorDash() {
-  const { data } = await sb.from('articles').select('*').eq('status','pending').order('submitted_at');
+  const data = await artRead({ where: { status: 'pending' }, order: 'submitted_at', dir: 'asc' });
   const queue = document.getElementById('editor-queue');
   // Update badge
   const badge = document.getElementById('nav-badge');
   if (badge) badge.textContent = data?.length || 0;
   // Update stats
-  const { data: allArticles } = await sb.from('articles').select('status');
+  const allArticles = await artRead({});
   if (allArticles) {
     document.getElementById('stat-pending').textContent = allArticles.filter(a=>a.status==='pending').length;
     document.getElementById('stat-published').textContent = allArticles.filter(a=>a.status==='published').length;
@@ -1008,7 +1011,7 @@ async function loadEditorDash() {
 }
 
 async function openReview(id) {
-  const { data } = await sb.from('articles').select('*').eq('id', id).single();
+  const data = await artRead({ where: { id: id }, single: true });
   if (!data) return;
   currentArticleId = id;
   document.getElementById('rv-hed').value = data.headline || '';
@@ -1047,7 +1050,7 @@ async function publishArticle() {
   const takedown_at = takedownVal ? new Date(takedownVal + 'T23:59:00').toISOString() : null;
 
   // Pull full article record so we have author_name, section, etc.
-  const { data: article } = await sb.from('articles').select('*').eq('id', currentArticleId).single();
+  const article = await artRead({ where: { id: currentArticleId }, single: true });
   if (!article) { showToast('review-toast', 'Could not load article data.', 'error'); if (btn) { btn.disabled=false; btn.textContent='Publish to Site'; } return; }
 
   const merged = { ...article, headline: hed, dek: dek, body: body, photo_url: photo_url };
@@ -1058,13 +1061,13 @@ async function publishArticle() {
 
   try {
     await pushToGitHub(path, html, hed);
-    await sb.from('articles').update({
+    await workerCall({ action: 'art_admin', id: currentArticleId, fields: {
       headline: hed, dek: dek, body: body, photo_url: photo_url,
       status: 'published',
       published_at: new Date().toISOString(),
       takedown_at: takedown_at,
       github_path: path
-    }).eq('id', currentArticleId);
+    }});
     showToast('review-toast',
       `✓ Published! "${hed}" is live at blueandwhitewhs.com/${path}`, 'success');
     loadEditorDash();
@@ -1079,11 +1082,11 @@ async function returnArticle() {
   if (!currentArticleId) return;
   const notes = document.getElementById('rv-note-input').value.trim();
   if (!notes) { alert('Add a note for the reporter before returning.'); return; }
-  await sb.from('articles').update({
+  await workerCall({ action: 'art_admin', id: currentArticleId, fields: {
     headline: document.getElementById('rv-hed').value.trim(),
     body: document.getElementById('rv-body').innerHTML,
     editor_notes: notes, status: 'returned'
-  }).eq('id', currentArticleId);
+  }});
   showToast('review-toast', 'Article returned to reporter with your notes.', 'success');
   setTimeout(() => showView('edash'), 2000);
 }
@@ -1104,7 +1107,7 @@ async function archiveArticle(id, headline, githubPath) {
     if (githubPath) {
       await deleteFromGitHub(githubPath, headline);
     }
-    await sb.from('articles').update({ status: 'archived', takedown_at: null }).eq('id', id);
+    await workerCall({ action: 'art_admin', id: id, fields: { status: 'archived', takedown_at: null } });
     showToast('articles-toast', `"${headline}" archived and removed from site.`, 'success');
     loadAllArticles();
   } catch (err) {
@@ -1113,7 +1116,7 @@ async function archiveArticle(id, headline, githubPath) {
 }
 
 async function republishArticle(id) {
-  const { data: article } = await sb.from('articles').select('*').eq('id', id).single();
+  const article = await artRead({ where: { id: id }, single: true });
   if (!article) return;
   const slug   = makeSlug(article.headline);
   const folder = SECTION_FOLDER[article.section] || 'news';
@@ -1121,12 +1124,12 @@ async function republishArticle(id) {
   const html   = generateArticleHTML(article);
   try {
     await pushToGitHub(path, html, article.headline);
-    await sb.from('articles').update({
+    await workerCall({ action: 'art_admin', id: id, fields: {
       status: 'published',
       published_at: new Date().toISOString(),
       takedown_at: null,
       github_path: path
-    }).eq('id', id);
+    }});
     showToast('articles-toast', `"${article.headline}" is live again.`, 'success');
     loadAllArticles();
   } catch (err) {
@@ -1137,7 +1140,7 @@ async function republishArticle(id) {
 async function trashArticle(id, headline) {
   if (!confirm(`Move "${headline}" to the Recycle Bin? It will be permanently deleted after 30 days.`)) return;
   try {
-    await sb.from('articles').update({ status: 'trashed', trashed_at: new Date().toISOString(), takedown_at: null }).eq('id', id);
+    await workerCall({ action: 'art_admin', id: id, fields: { status: 'trashed', trashed_at: new Date().toISOString(), takedown_at: null } });
     showToast('articles-toast', `"${headline}" moved to the Recycle Bin.`, 'success');
     loadAllArticles();
   } catch(err) {
@@ -1147,7 +1150,7 @@ async function trashArticle(id, headline) {
 
 async function restoreArticle(id, headline) {
   try {
-    await sb.from('articles').update({ status: 'archived', trashed_at: null }).eq('id', id);
+    await workerCall({ action: 'art_admin', id: id, fields: { status: 'archived', trashed_at: null } });
     showToast('trash-toast', `"${headline}" restored to Archived.`, 'success');
     loadTrash();
   } catch(err) {
@@ -1158,7 +1161,7 @@ async function restoreArticle(id, headline) {
 async function deleteForever(id, headline) {
   if (!confirm(`Permanently delete "${headline}"? This cannot be undone.`)) return;
   try {
-    await sb.from('articles').delete().eq('id', id);
+    await workerCall({ action: 'art_destroy', id: id });
     showToast('trash-toast', `"${headline}" permanently deleted.`, 'success');
     loadTrash();
   } catch(err) {
@@ -1175,7 +1178,7 @@ function setTakedown(days) {
 }
 
 async function loadTrash() {
-  const { data } = await sb.from('articles').select('*').eq('status','trashed').order('trashed_at', {ascending:false});
+  const data = await artRead({ where: { status: 'trashed' }, order: 'trashed_at', dir: 'desc' });
   const list = document.getElementById('trash-list');
   if (!data || data.length === 0) { list.innerHTML = '<div class="empty">Recycle Bin is empty.</div>'; return; }
   list.innerHTML = `<div class="toast toast-success" id="trash-toast"></div>
@@ -1202,7 +1205,7 @@ async function loadTrash() {
 // ── ALL ARTICLES ──────────────────────────────────────────────────────────────
 
 async function loadAllArticles() {
-  const { data } = await sb.from('articles').select('*').neq('status','trashed').order('created_at', {ascending:false});
+  const data = await artRead({ where: { neq_status: 'trashed' }, order: 'created_at', dir: 'desc' });
   const list = document.getElementById('all-articles-list');
   if (!data || data.length === 0) { list.innerHTML = '<div class="empty">No articles yet.</div>'; return; }
   const isEditor = currentUser.role === 'editor' || currentUser.role === 'adviser';
@@ -1238,9 +1241,7 @@ async function loadAllArticles() {
 // ── ANALYTICS ─────────────────────────────────────────────────────────────────
 
 async function loadAnalytics() {
-  const { data } = await sb.from('articles')
-    .select('id,headline,author_name,section,status,word_count,keystroke_count,paste_events,time_on_page,session_count,submitted_at')
-    .not('status', 'eq', 'draft').order('submitted_at', {ascending:false});
+  const data = await artRead({ where: { neq_status: 'draft' }, order: 'submitted_at', dir: 'desc' });
   const list = document.getElementById('analytics-list');
   if (!data || data.length === 0) { list.innerHTML = '<div class="empty">No submitted articles yet.</div>'; return; }
   list.innerHTML = data.map(a => {
@@ -1528,7 +1529,8 @@ async function publishStaffPage() {
 // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
 
 async function loadAssignmentsMgr() {
-  const { data } = await sb.from('assignments').select('*').order('due_date');
+  let data = [];
+  try { data = (await workerCall({ action: 'assign_list' })).rows; } catch(e) { console.error(e.message); }
   const list = document.getElementById('assignments-mgr-list');
   if (!data || data.length === 0) { list.innerHTML = '<div class="empty">No assignments yet. Create one below.</div>'; return; }
   list.innerHTML = `<div class="section-div">Current Assignments</div>` + data.map(a => {
@@ -1560,12 +1562,12 @@ async function createAssignment() {
   const minWords = parseInt(document.getElementById('dl-words').value) || 0;
   const instructions = document.getElementById('dl-instructions').value.trim();
   if (!title || !date) { alert('Please add a title and due date.'); return; }
-  const { error } = await sb.from('assignments').insert([{
-    title, due_date: new Date(date).toISOString(),
-    assigned_to: assignTo, min_words: minWords,
-    instructions, created_by: currentUser.id
-  }]);
-  if (error) { showToast('assign-toast', 'Error: '+error.message, 'error'); return; }
+  try {
+    await workerCall({ action: 'assign_add', fields: {
+      title: title, due_date: new Date(date).toISOString(),
+      assigned_to: assignTo, min_words: minWords, instructions: instructions
+    }});
+  } catch(err) { showToast('assign-toast', 'Error: ' + err.message, 'error'); return; }
   document.getElementById('dl-title').value = '';
   document.getElementById('dl-date').value = '';
   document.getElementById('dl-instructions').value = '';
@@ -1575,7 +1577,7 @@ async function createAssignment() {
 
 async function deleteAssignment(id) {
   if (!confirm('Delete this assignment?')) return;
-  await sb.from('assignments').delete().eq('id', id);
+  try { await workerCall({ action: 'assign_destroy', id: id }); } catch(err) { showToast('assign-toast', 'Error: ' + err.message, 'error'); }
   loadAssignmentsMgr();
 }
 
@@ -1668,14 +1670,8 @@ async function doAutosave() {
   const ind = document.getElementById('autosave-indicator');
   if (ind) ind.textContent = 'Saving…';
   try {
-    if (currentArticleId) {
-      await sb.from('articles').update(payload).eq('id', currentArticleId);
-    } else {
-      const { data, error } = await sb.from('articles')
-        .insert([{...payload, author_id: currentUser.id, author_name: currentUser.name}])
-        .select().single();
-      if (!error && data) { currentArticleId = data.id; }
-    }
+    const r = await workerCall({ action: 'art_save', id: currentArticleId || undefined, fields: payload });
+    if (!currentArticleId) currentArticleId = r.id;
     if (ind) { ind.textContent = 'Autosaved ✓'; setTimeout(function(){ if(ind) ind.textContent=''; }, 2500); }
   } catch(e) {
     if (ind) ind.textContent = 'Save failed';
