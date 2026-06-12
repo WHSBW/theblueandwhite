@@ -144,6 +144,11 @@
     .note-meta{font-size:11px;color:var(--text-muted);margin-bottom:4px;}
     .note-meta strong{color:var(--navy);}
     .note-text{font-size:13px;color:var(--text-mid);line-height:1.5;}
+    .note-item.note-done{opacity:0.65;}
+    .note-item.note-done .note-text{text-decoration:line-through;}
+    .note-check{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px;color:var(--text-muted);cursor:pointer;user-select:none;}
+    .note-check input{accent-color:var(--success);cursor:pointer;}
+    .note-done-badge{margin-top:6px;font-size:11px;color:var(--success);}
 
     /* ANALYTICS */
     .risk-badge{font-size:10px;font-weight:600;padding:3px 10px;border-radius:2px;text-transform:uppercase;letter-spacing:0.06em;flex-shrink:0;}
@@ -276,6 +281,7 @@
                 <button class="tb-btn" onclick="document.execCommand('bold')"><b>B</b></button>
                 <button class="tb-btn" onclick="document.execCommand('italic')"><i>I</i></button>
                 <button class="tb-btn" onclick="document.execCommand('underline')"><u>U</u></button>
+                <button class="tb-btn" title="Remove ALL blue editor highlights once you've reviewed them" onclick="clearHighlights('w-body')">HL✕</button>
                 <span style="width:1px;background:var(--light-gray);margin:2px 4px;"></span>
                 <button class="tb-btn" onclick="document.execCommand('undo')">↩</button>
                 <button class="tb-btn" onclick="document.execCommand('redo')">↪</button>
@@ -363,6 +369,8 @@
                   <div class="editor-toolbar">
                     <button class="tb-btn" onclick="document.execCommand('bold')"><b>B</b></button>
                     <button class="tb-btn" onclick="document.execCommand('italic')"><i>I</i></button>
+                    <button class="tb-btn" title="Highlight selected text (shows the reporter what changed)" style="background:#CFE8FF;" onclick="document.execCommand('hiliteColor', false, '#CFE8FF')">HL</button>
+                    <button class="tb-btn" title="Remove ALL highlights from this article" onclick="clearHighlights('rv-body')">HL✕</button>
                     <button class="tb-btn" onclick="document.execCommand('undo')">↩</button>
                     <button class="tb-btn" onclick="document.execCommand('redo')">↪</button>
                     <span style="width:1px;background:var(--light-gray);margin:2px 4px;"></span>
@@ -944,11 +952,9 @@ async function loadArticleForEdit(id) {
   populateAssignmentDropdown(data.assignment_id || '');
   updateWC('w-body','w-wc');
   if (data.editor_notes) {
-    const notes = parseEditorNotes(data.editor_notes);
+    writeNotes = parseEditorNotes(data.editor_notes);
     document.getElementById('returned-notes-section').style.display = 'block';
-    document.getElementById('returned-notes-content').innerHTML = notes.map(n =>
-      `<div class="note-item editor-note"><div class="note-meta"><strong>${escHtml(n.by || 'Editor')}</strong>${n.at ? ' · ' + escHtml(n.at) : ''}</div><div class="note-text">${escHtml(n.text)}</div></div>`
-    ).join('');
+    renderWriteNotes();
   }
   document.getElementById('topbar-title').textContent = 'Edit Article';
   document.getElementById('topbar-actions').innerHTML =
@@ -1076,7 +1082,7 @@ async function publishArticle() {
 
   const hed  = document.getElementById('rv-hed').value.trim();
   const dek  = document.getElementById('rv-dek').value.trim();
-  const body = document.getElementById('rv-body').innerHTML;
+  const body = stripHighlightsFromHTML(document.getElementById('rv-body').innerHTML); // no robin's-egg articles
   const photo_url = (document.getElementById('rv-photo') ? document.getElementById('rv-photo').value.trim() : '');
   const takedownVal = (document.getElementById('rv-takedown') ? document.getElementById('rv-takedown').value : '');
   const takedown_at = takedownVal ? new Date(takedownVal + 'T23:59:00').toISOString() : null;
@@ -1130,6 +1136,67 @@ async function returnArticle() {
 }
 
 let reviewNotes = [];
+let writeNotes = [];
+
+// ── Reporter-side note checkboxes ──
+function renderWriteNotes() {
+  document.getElementById('returned-notes-content').innerHTML = writeNotes.map((n, i) =>
+    `<div class="note-item editor-note ${n.done ? 'note-done' : ''}">
+      <div class="note-meta"><strong>${escHtml(n.by || 'Editor')}</strong>${n.at ? ' · ' + escHtml(n.at) : ''}</div>
+      <div class="note-text">${escHtml(n.text)}</div>
+      <label class="note-check"><input type="checkbox" ${n.done ? 'checked' : ''} onchange="toggleWriteNote(${i}, this)">
+        ${n.done ? '✓ Done' + (n.done_by ? ' by ' + escHtml(n.done_by) : '') + (n.done_at ? ' · ' + escHtml(n.done_at) : '') : 'Mark as done'}
+      </label>
+    </div>`
+  ).join('');
+}
+
+async function toggleWriteNote(i, el) {
+  const want = el.checked;
+  el.disabled = true;
+  try {
+    const r = await workerCall({ action: 'note_toggle', id: currentArticleId, note_index: i, done: want });
+    writeNotes = r.notes;
+    renderWriteNotes();
+  } catch (err) {
+    el.checked = !want;
+    el.disabled = false;
+    alert('Could not update note: ' + err.message);
+  }
+}
+
+// ── Highlight helpers (light-blue editor highlights) ──
+function stripHighlightStyles(root) {
+  root.querySelectorAll('mark').forEach(m => {
+    const p = m.parentNode;
+    while (m.firstChild) p.insertBefore(m.firstChild, m);
+    p.removeChild(m);
+  });
+  root.querySelectorAll('[style]').forEach(n => {
+    if (n.style.backgroundColor) n.style.backgroundColor = '';
+    if (!n.getAttribute('style')) n.removeAttribute('style');
+    else if (n.getAttribute('style').trim() === '') n.removeAttribute('style');
+  });
+  root.querySelectorAll('span').forEach(s => {
+    if (!s.attributes.length) { // unwrap now-empty spans
+      const p = s.parentNode;
+      while (s.firstChild) p.insertBefore(s.firstChild, s);
+      p.removeChild(s);
+    }
+  });
+}
+
+function clearHighlights(id) {
+  if (!confirm('Remove all highlights from this article?')) return;
+  stripHighlightStyles(document.getElementById(id));
+}
+
+function stripHighlightsFromHTML(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  stripHighlightStyles(tmp);
+  return tmp.innerHTML;
+}
 
 function noteTimestamp() {
   return new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -1153,7 +1220,7 @@ function renderNotesThread() {
     return;
   }
   thread.innerHTML = reviewNotes.map(n =>
-    `<div class="note-item editor-note"><div class="note-meta"><strong>${escHtml(n.by)}</strong>${n.at ? ' · ' + escHtml(n.at) : ''}</div><div class="note-text">${escHtml(n.text)}</div></div>`
+    `<div class="note-item editor-note ${n.done ? 'note-done' : ''}"><div class="note-meta"><strong>${escHtml(n.by)}</strong>${n.at ? ' · ' + escHtml(n.at) : ''}</div><div class="note-text">${escHtml(n.text)}</div>${n.done ? `<div class="note-done-badge">✓ Done${n.done_by ? ' by ' + escHtml(n.done_by) : ''}${n.done_at ? ' · ' + escHtml(n.done_at) : ''}</div>` : ''}</div>`
   ).join('');
 }
 
