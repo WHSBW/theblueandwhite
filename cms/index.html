@@ -149,6 +149,19 @@
     .note-check{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px;color:var(--text-muted);cursor:pointer;user-select:none;}
     .note-check input{accent-color:var(--success);cursor:pointer;}
     .note-done-badge{margin-top:6px;font-size:11px;color:var(--success);}
+    /* ── Workflow stage stepper + guidance (the chain) ── */
+    .stage-box{background:var(--paper,#fbfaf7);border:1px solid var(--light-gray,#e5e2da);border-radius:8px;padding:14px 16px;margin-bottom:18px;}
+    .stage-steps{display:flex;align-items:center;gap:0;margin-bottom:10px;flex-wrap:wrap;}
+    .stage-step{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-muted,#9a958a);}
+    .stage-step .sdot{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:var(--light-gray,#e5e2da);color:var(--text-muted,#9a958a);flex:none;}
+    .stage-step.done .sdot{background:#9ec7e8;color:#fff;}
+    .stage-step.active .sdot{background:var(--navy,#16243d);color:#fff;}
+    .stage-step.active{color:var(--navy,#16243d);font-weight:700;}
+    .stage-step.done{color:#5a8bb0;}
+    .stage-sep{flex:1;height:2px;min-width:18px;background:var(--light-gray,#e5e2da);margin:0 6px;}
+    .stage-sep.done{background:#9ec7e8;}
+    .stage-guide{font-style:italic;font-size:13.5px;color:var(--text-mid,#555);line-height:1.55;}
+    .stage-guide strong{font-style:normal;color:var(--navy,#16243d);}
 
     /* ANALYTICS */
     .risk-badge{font-size:10px;font-weight:600;padding:3px 10px;border-radius:2px;text-transform:uppercase;letter-spacing:0.06em;flex-shrink:0;}
@@ -246,6 +259,7 @@
         <div id="view-write" class="view">
           <div class="paste-alert" id="paste-alert">&#9888;&nbsp; <span id="paste-msg">Paste detected — this is logged.</span></div>
           <div class="toast toast-success" id="write-toast"></div>
+          <div class="stage-box" id="write-stage"></div>
           <div class="form-grid">
             <div class="form-group">
               <label class="form-label">Section <span class="req">*</span></label>
@@ -935,6 +949,8 @@ function initWriteView() {
   populateAssignmentDropdown('');
   document.getElementById('returned-notes-section').style.display = 'none';
   document.getElementById('w-wc').textContent = '0 words';
+  writeNotes = [];
+  renderWriteStage('new', false);
   resetTracking();
 }
 
@@ -952,11 +968,14 @@ async function loadArticleForEdit(id) {
   document.getElementById('w-photo').value = data.photo_url || '';
   populateAssignmentDropdown(data.assignment_id || '');
   updateWC('w-body','w-wc');
-  if (data.editor_notes) {
-    writeNotes = parseEditorNotes(data.editor_notes);
+  writeNotes = parseEditorNotes(data.editor_notes);
+  if (writeNotes.length) {
     document.getElementById('returned-notes-section').style.display = 'block';
     renderWriteNotes();
+  } else {
+    document.getElementById('returned-notes-section').style.display = 'none';
   }
+  renderWriteStage(data.status || 'draft', writeNotes.length > 0);
   document.getElementById('topbar-title').textContent = 'Edit Article';
   document.getElementById('topbar-actions').innerHTML =
     '<button class="btn" onclick="saveDraft()">Save Draft</button><button class="btn btn-primary" onclick="submitArticle()">Resubmit for Review</button>';
@@ -1078,6 +1097,12 @@ async function openReview(id) {
 
 async function publishArticle() {
   if (!currentArticleId) return;
+  // The chain: every article must go through at least one review round before
+  // it can be published. reviewNotes is loaded from the article in openReview.
+  if (!reviewNotes.length) {
+    alert('This article hasn\'t been through a review round yet.\n\nEvery article needs at least one round of editor notes before it can be published. Add a note and click "Return with Notes" first — the reporter revises and resubmits, then you can publish.');
+    return;
+  }
   const btn = document.querySelector('[onclick="publishArticle()"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Publishing…'; }
 
@@ -1138,6 +1163,49 @@ async function returnArticle() {
 
 let reviewNotes = [];
 let writeNotes = [];
+
+// ── Workflow stage indicator (the chain) ──
+// Shows the reporter which step they're on and, in italics, exactly what to do.
+// status: 'new'|'draft'|'pending'|'returned'|'published'|'archived'|'trashed'
+function renderWriteStage(status, hasNotes) {
+  const box = document.getElementById('write-stage');
+  if (!box) return;
+  const labels = ['Rough Draft', 'Editor Review', 'Revisions', 'Published'];
+  // map status -> active step (1-based); 0 = none highlighted
+  let active = 1;
+  if (status === 'pending') active = 2;
+  else if (status === 'returned') active = 3;
+  else if (status === 'published') active = 4;
+  else active = 1; // new, draft
+
+  let guide = '';
+  if (status === 'published') {
+    guide = '<strong>Published!</strong> Your article is live on the site. 🎉 If you spot something to fix, ask your editor to reopen it.';
+  } else if (status === 'archived' || status === 'trashed') {
+    guide = 'This article is currently off the site. Talk to your editor if you think it should come back.';
+    active = 0;
+  } else if (status === 'returned') {
+    guide = '<strong>Step 3 — your turn.</strong> Your editor left notes below. Fix each one, check it off as you go, then click <strong>Resubmit for Review</strong>.';
+  } else if (status === 'pending' && hasNotes) {
+    guide = '<strong>Step 2 — final review.</strong> Your revised draft is back with your editor. Hang tight — they\'ll either publish it or send more notes.';
+  } else if (status === 'pending') {
+    guide = '<strong>Step 2 — with your editor.</strong> Your rough draft was submitted. Your editor will read it and send notes back here. (Every article gets at least one round of notes before it can be published.)';
+  } else {
+    guide = '<strong>Step 1 — write your rough draft.</strong> When it\'s ready, click <strong>Submit for Review</strong>. Your editor will read it and send notes — every article gets at least one round of feedback before it goes live.';
+  }
+
+  let steps = '';
+  for (let i = 0; i < labels.length; i++) {
+    const n = i + 1;
+    const cls = active === 0 ? '' : (n < active ? 'done' : (n === active ? 'active' : ''));
+    if (i > 0) {
+      const sepDone = active !== 0 && n <= active ? 'done' : '';
+      steps += `<div class="stage-sep ${sepDone}"></div>`;
+    }
+    steps += `<div class="stage-step ${cls}"><span class="sdot">${n < active ? '✓' : n}</span>${labels[i]}</div>`;
+  }
+  box.innerHTML = `<div class="stage-steps">${steps}</div><div class="stage-guide">${guide}</div>`;
+}
 
 // ── Reporter-side note checkboxes ──
 function renderWriteNotes() {
