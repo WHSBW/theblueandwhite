@@ -570,6 +570,7 @@ async function workerCall(payload) {
   return data;
 }
 let currentArticleId = null;
+let currentArticleStatus = 'new'; // 'new' until an existing article is loaded
 let sessionStart = Date.now();
 let keystrokes = 0;
 let pastes = 0;
@@ -946,6 +947,7 @@ function populateAssignmentDropdown(selectedId) {
 
 function initWriteView() {
   currentArticleId = null;
+  currentArticleStatus = 'new';
   document.getElementById('w-hed').value = '';
   document.getElementById('w-dek').value = '';
   document.getElementById('w-body').innerHTML = '';
@@ -966,6 +968,7 @@ async function loadArticleForEdit(id) {
   if (!data) { alert('Could not load this article from the server. Check your connection and try again — your work has not been changed.'); return; }
   showView('write'); // switch (and form-wipe) FIRST, then populate
   currentArticleId = id;
+  currentArticleStatus = data.status || 'draft';
   document.getElementById('w-hed').value = data.headline || '';
   document.getElementById('w-dek').value = data.dek || '';
   document.getElementById('w-body').innerHTML = data.body || '';
@@ -1010,15 +1013,17 @@ async function saveDraft() {
 async function submitArticle() {
   const payload = getArticlePayload('pending');
   if (!payload) return;
-  // Late lockout: reporters can't submit more than maxLateDays school days past
-  // an assignment's due date. Advisers/editors are never locked — that's the override.
-  if (currentUser.role === 'reporter' && payload.assignment_id) {
+  // Late lockout: applies ONLY to a first-time submission of brand-new work.
+  // Once an article has been returned (or is already in the queue), the reporter
+  // can always resubmit — the point is to let them finish the revision loop.
+  const isInitialSubmission = (currentArticleStatus === 'new' || currentArticleStatus === 'draft');
+  if (isInitialSubmission && currentUser.role === 'reporter' && payload.assignment_id) {
     const asg = assignmentsCache.find(x => x.id === payload.assignment_id);
     if (asg && asg.due_date) {
       const pol = _latePolicy();
       const days = schoolDaysLate(asg.due_date, new Date().toISOString());
       if (days > pol.maxLateDays) {
-        alert(`This assignment is more than ${pol.maxLateDays} school days past its due date, so it can't be submitted here anymore.\n\nPlease talk to Ms. Novello — she can still accept it for you.`);
+        alert(`This assignment is more than ${pol.maxLateDays} school days past its due date, so it can't be submitted here as a new article.\n\nPlease talk to Ms. Novello — she can still accept it for you.`);
         return;
       }
     }
