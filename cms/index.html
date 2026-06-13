@@ -178,6 +178,10 @@
     .ext-req-card .erc-meta{font-size:12px;color:var(--text-muted,#888);margin:2px 0 5px;}
     .ext-req-card .erc-reason{font-size:13px;color:var(--text-mid,#444);font-style:italic;line-height:1.5;}
     .ext-req-card .erc-actions{display:flex;gap:6px;flex:none;}
+    /* Soft edit-lock warning */
+    .lock-warn{background:#fff4d6;border:1px solid #f0d68a;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#7a5a00;line-height:1.5;display:flex;align-items:flex-start;gap:8px;}
+    .lock-warn .lw-x{margin-left:auto;cursor:pointer;font-weight:700;color:#9a7a00;opacity:.6;flex:none;}
+    .lock-warn .lw-x:hover{opacity:1;}
 
     /* ANALYTICS */
     .risk-badge{font-size:10px;font-weight:600;padding:3px 10px;border-radius:2px;text-transform:uppercase;letter-spacing:0.06em;flex-shrink:0;}
@@ -275,6 +279,7 @@
         <div id="view-write" class="view">
           <div class="paste-alert" id="paste-alert">&#9888;&nbsp; <span id="paste-msg">Paste detected — this is logged.</span></div>
           <div class="toast toast-success" id="write-toast"></div>
+          <div id="lock-warn-write" class="lock-warn" style="display:none;"></div>
           <div class="stage-box" id="write-stage"></div>
           <div class="form-grid">
             <div class="form-group">
@@ -372,6 +377,7 @@
         <!-- EDITOR: REVIEW -->
         <div id="view-review" class="view">
           <div class="toast toast-success" id="review-toast"></div>
+          <div id="lock-warn-review" class="lock-warn" style="display:none;"></div>
           <div style="display:grid;grid-template-columns:1fr 300px;gap:20px;">
             <div>
               <div class="form-group">
@@ -969,6 +975,7 @@ function populateAssignmentDropdown(selectedId) {
 function initWriteView() {
   currentArticleId = null;
   currentArticleStatus = 'new';
+  showLockWarn('lock-warn-write', null);
   document.getElementById('w-hed').value = '';
   document.getElementById('w-dek').value = '';
   document.getElementById('w-body').innerHTML = '';
@@ -990,6 +997,7 @@ async function loadArticleForEdit(id) {
   showView('write'); // switch (and form-wipe) FIRST, then populate
   currentArticleId = id;
   currentArticleStatus = data.status || 'draft';
+  checkEditLock(id, 'lock-warn-write');
   document.getElementById('w-hed').value = data.headline || '';
   document.getElementById('w-dek').value = data.dek || '';
   document.getElementById('w-body').innerHTML = data.body || '';
@@ -1213,6 +1221,28 @@ async function denyExtension(id){
   }catch(e){ alert('Could not deny: ' + e.message); }
 }
 
+// ── SOFT EDIT-LOCK (warn-only) ──
+function relTimeFromISO(iso){
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime())/60000));
+  if (mins < 1) return 'less than a minute ago';
+  if (mins === 1) return 'about a minute ago';
+  return `about ${mins} minutes ago`;
+}
+function showLockWarn(elId, warn){
+  const el = document.getElementById(elId);
+  if(!el) return;
+  if(!warn || !warn.name){ el.style.display='none'; el.innerHTML=''; return; }
+  el.innerHTML = `<span>⚠️</span><span><strong>${escHtml(warn.name)}</strong> opened this article ${relTimeFromISO(warn.at)} and may be editing it too. You can keep working, but whoever saves last wins — so check with them before saving big changes.</span>`
+    + `<span class="lw-x" onclick="this.parentNode.style.display='none'">×</span>`;
+  el.style.display='flex';
+}
+// Stamp "I'm editing this" and warn if someone else just opened it. Non-blocking.
+function checkEditLock(id, elId){
+  workerCall({ action:'lock_touch', id })
+    .then(r => showLockWarn(elId, r && r.warn))
+    .catch(()=>{ /* worker not updated yet, or offline — just skip the warning */ });
+}
+
 // ── EDITOR DASHBOARD ──────────────────────────────────────────────────────────
 
 async function loadEditorDash() {
@@ -1283,6 +1313,7 @@ async function openReview(id) {
   const data = await artRead({ where: { id: id }, single: true });
   if (!data) return;
   currentArticleId = id;
+  checkEditLock(id, 'lock-warn-review');
   document.getElementById('rv-hed').value = data.headline || '';
   document.getElementById('rv-dek').value = data.dek || '';
   document.getElementById('rv-photo').value = data.photo_url || '';
