@@ -165,6 +165,19 @@
     /* ── Late flags ── */
     .late-badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:3px;background:#fdecc8;color:#8a5a00;margin-left:6px;letter-spacing:.02em;white-space:nowrap;}
     .late-badge.late-locked{background:#fbe0de;color:#b02a1e;}
+    .late-badge.late-ext{background:#dcf3e4;color:#1f7a44;}
+    .ext-chip{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:3px;margin-left:6px;letter-spacing:.02em;white-space:nowrap;}
+    .ext-chip.ext-req{background:#e6ecf7;color:#2f4d86;}
+    .ext-chip.ext-grant{background:#dcf3e4;color:#1f7a44;}
+    .ext-chip.ext-deny{background:#fbe0de;color:#b02a1e;}
+    /* Extension requests inbox */
+    .ext-inbox{margin-bottom:22px;}
+    .ext-req-card{display:flex;align-items:flex-start;gap:12px;background:#eef2f9;border:1px solid #d6deec;border-radius:8px;padding:12px 14px;margin-bottom:8px;}
+    .ext-req-card .erc-body{flex:1;min-width:0;}
+    .ext-req-card .erc-hed{font-weight:600;color:var(--navy,#16243d);font-size:14px;}
+    .ext-req-card .erc-meta{font-size:12px;color:var(--text-muted,#888);margin:2px 0 5px;}
+    .ext-req-card .erc-reason{font-size:13px;color:var(--text-mid,#444);font-style:italic;line-height:1.5;}
+    .ext-req-card .erc-actions{display:flex;gap:6px;flex:none;}
 
     /* ANALYTICS */
     .risk-badge{font-size:10px;font-weight:600;padding:3px 10px;border-radius:2px;text-transform:uppercase;letter-spacing:0.06em;flex-shrink:0;}
@@ -351,6 +364,7 @@
             <div class="stat-card"><div class="stat-num" id="stat-drafts">—</div><div class="stat-label">Drafts</div></div>
             <div class="stat-card"><div class="stat-num" id="stat-returned">—</div><div class="stat-label">Returned</div></div>
           </div>
+          <div id="ext-inbox" class="ext-inbox"></div>
           <div class="section-div">Pending Review</div>
           <div id="editor-queue"><div class="loading">Loading queue...</div></div>
         </div>
@@ -880,6 +894,7 @@ async function loadReporterDash() {
     assignments = (ar.rows || []).filter(a => a.assigned_to === 'all' || a.assigned_to === currentUser.section);
   } catch(e) { console.error('assignments load failed:', e.message); }
   assignmentsCache = assignments;
+  const extMap = await getExtensionMap();
   const aList = document.getElementById('assignments-list');
   if (!assignments || assignments.length === 0) {
     aList.innerHTML = '<div class="empty">No assignments right now.</div>';
@@ -892,7 +907,8 @@ async function loadReporterDash() {
       const dueText = diff < 0 ? `${Math.abs(diff)}d late` : diff === 0 ? 'Due today' : `Due in ${diff}d`;
       const safeTitle = (a.title||'').replace(/'/g,"\\'");
       const mine = (articles || []).find(ar => ar.assignment_id === a.id && ar.status !== 'trashed');
-      let statusPill = '', actionBtn = '';
+      const ext = mine ? extMap[mine.id] : null;
+      let statusPill = '', actionBtn = '', extUI = '';
       if (!mine) {
         actionBtn = `<button class="btn btn-sm btn-primary" onclick="startArticleFromAssignment('${a.id}','${safeTitle}')">Write</button>`;
       } else {
@@ -902,6 +918,11 @@ async function loadReporterDash() {
           : 'Draft in progress';
         statusPill = `<span class="status-pill s-${mine.status}" style="margin-right:8px;">${label}</span>`;
         actionBtn = `<button class="btn btn-sm" onclick="loadArticleForEdit('${mine.id}')">Open</button>`;
+        // Extension: show status, or offer to request (only if not already active and not published)
+        extUI = extStatusHTML(ext);
+        if (!extUI && mine.status !== 'published') {
+          extUI = `<button class="btn btn-sm" onclick="requestExtension('${mine.id}')">Request more time</button>`;
+        }
       }
       return `<div class="assign-card">
         <div class="assign-info">
@@ -909,7 +930,7 @@ async function loadReporterDash() {
           <div class="assign-meta">${a.assigned_to === 'all' ? 'Whole class' : a.assigned_to+' section'} · ${a.min_words ? a.min_words+' words min' : 'No word minimum'}</div>
         </div>
         <span class="due-badge ${dueClass}">${dueText}</span>
-        ${statusPill}${actionBtn}
+        ${statusPill}${extUI}${actionBtn}
       </div>`;
     }).join('');
   }
@@ -923,7 +944,7 @@ async function loadReporterDash() {
       <div class="queue-item" onclick="loadArticleForEdit('${a.id}')">
         <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
         <div class="q-info">
-          <div class="q-hed">${a.headline || 'Untitled draft'}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id]))}</div>
+          <div class="q-hed">${a.headline || 'Untitled draft'}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id], extMap[a.id]))}${extStatusHTML(extMap[a.id])}</div>
           <div class="q-meta">${a.section || '—'} · ${formatDate(a.created_at)}</div>
         </div>
         <span class="status-pill s-${a.status}">${a.status}</span>
@@ -985,7 +1006,14 @@ async function loadArticleForEdit(id) {
   } else {
     document.getElementById('returned-notes-section').style.display = 'none';
   }
-  renderWriteStage(data.status || 'draft', writeNotes.length > 0);
+  renderWriteStage(data.status || 'draft', writeNotes.length > 0, { assignmentLinked: !!data.assignment_id });
+  // Fetch this article's extension (if any) and re-render the stage with it.
+  if (data.assignment_id) {
+    getExtensionMap().then(extMap => {
+      renderWriteStage(data.status || 'draft', writeNotes.length > 0,
+        { assignmentLinked: true, extRow: extMap[id] });
+    });
+  }
   document.getElementById('topbar-title').textContent = 'Edit Article';
   document.getElementById('topbar-actions').innerHTML =
     '<button class="btn" onclick="saveDraft()">Save Draft</button><button class="btn btn-primary" onclick="submitArticle()">Resubmit for Review</button>';
@@ -1087,21 +1115,102 @@ async function getAssignmentDueMap(){
   }catch(e){ console.error('due map failed:', e.message); }
   return map;
 }
-// Late info for one article given its assignment's due date.
-function lateInfoFor(article, dueISO){
-  if(!dueISO || !article.assignment_id) return null; // free-write or no deadline
+// Full assignment lookup {id: {title, due_date, ...}} for labels in the inbox.
+async function getAssignmentMap(){
+  const map={};
+  try{
+    const r=await workerCall({ action:'assign_list' });
+    (r.rows||[]).forEach(a=>{ map[a.id]=a; });
+  }catch(e){ console.error('assignment map failed:', e.message); }
+  return map;
+}
+// {article_id: extensionRow}. Reporters get only their own; editors/adviser all.
+async function getExtensionMap(){
+  const map={};
+  try{
+    const r=await workerCall({ action:'ext_list' });
+    (r.rows||[]).forEach(e=>{ map[e.article_id]=e; });
+  }catch(e){ console.error('extension map failed:', e.message); }
+  return map;
+}
+// A granted extension overrides the assignment's due date for this article.
+function effectiveDueISO(extRow, assignmentDueISO){
+  if(extRow && extRow.status==='granted' && extRow.new_due) return extRow.new_due;
+  return assignmentDueISO || null;
+}
+// Late info for one article, honoring any granted extension.
+function lateInfoFor(article, dueISO, extRow){
+  const eff = effectiveDueISO(extRow, dueISO);
+  if(!eff || !article.assignment_id) return null; // free-write or no deadline
   const refISO = article.submitted_at || new Date().toISOString();
-  const days = schoolDaysLate(dueISO, refISO);
-  if(days<=0) return { late:false, days:0 };
+  const days = schoolDaysLate(eff, refISO);
+  const extended = !!(extRow && extRow.status==='granted');
+  if(days<=0) return { late:false, days:0, extended };
   const pol=_latePolicy();
-  return { late:true, days, penalty: days*pol.percentPerDay, locked: days>pol.maxLateDays, submitted: !!article.submitted_at };
+  return { late:true, days, penalty: days*pol.percentPerDay, locked: days>pol.maxLateDays, submitted: !!article.submitted_at, extended };
 }
 function lateBadgeHTML(info){
-  if(!info || !info.late) return '';
+  if(!info || !info.late) return (info && info.extended) ? '<span class="late-badge late-ext" title="Extra time granted">✓ extended</span>' : '';
   const word = info.days>1 ? 'school days' : 'school day';
-  if(info.locked) return `<span class="late-badge late-locked" title="More than ${_latePolicy().maxLateDays} school days past due">⚠ Past deadline · ${info.days} ${word}</span>`;
+  const extNote = info.extended ? ' (extended)' : '';
+  if(info.locked) return `<span class="late-badge late-locked" title="More than ${_latePolicy().maxLateDays} school days past due">⚠ Past deadline · ${info.days} ${word}${extNote}</span>`;
   const tense = info.submitted ? 'late' : 'overdue';
-  return `<span class="late-badge" title="${info.penalty}% late penalty at ${_latePolicy().percentPerDay}%/school day">⏰ ${info.days} ${word} ${tense} · −${info.penalty}%</span>`;
+  return `<span class="late-badge" title="${info.penalty}% late penalty at ${_latePolicy().percentPerDay}%/school day">⏰ ${info.days} ${word} ${tense} · −${info.penalty}%${extNote}</span>`;
+}
+// Short human label for an extension's current state (for cards / stage box).
+function extStatusHTML(extRow){
+  if(!extRow || !extRow.status) return '';
+  if(extRow.status==='requested') return '<span class="ext-chip ext-req">⏳ More time requested</span>';
+  if(extRow.status==='granted'){
+    const d = extRow.new_due ? formatDate(extRow.new_due) : '';
+    return `<span class="ext-chip ext-grant">✓ Extra time${d?' until '+d:''}</span>`;
+  }
+  if(extRow.status==='denied') return '<span class="ext-chip ext-deny">✗ Extension denied</span>';
+  return '';
+}
+
+// Reporter asks for more time. Saves the draft first if needed (request attaches to the article).
+async function requestExtension(id){
+  let target = id || currentArticleId;
+  if(!target){
+    await saveDraft();
+    target = currentArticleId;
+    if(!target){ alert('Please save your draft first, then request more time.'); return; }
+  }
+  const reason = prompt("Tell Ms. Novello why you need more time (she'll see this):", '');
+  if(reason===null) return;
+  try{
+    await workerCall({ action:'ext_request', id: target, reason: reason.trim() });
+    alert("Your request was sent to Ms. Novello. You'll see her answer on your dashboard.");
+    if(currentArticleId === target) loadArticleForEdit(target); else loadReporterDash();
+  }catch(e){ alert('Could not send request: ' + e.message); }
+}
+
+function _defaultExtDate(){
+  const d=new Date(); d.setDate(d.getDate()+3);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+// Adviser grants extra time (new due date) with an optional private note.
+async function grantExtension(id){
+  const dateStr = prompt('Grant extension — new due date (YYYY-MM-DD):', _defaultExtDate());
+  if(dateStr===null) return;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim())){ alert('Please use the format YYYY-MM-DD (e.g. 2026-09-15).'); return; }
+  const note = prompt('Optional private note (kept for your records / weekly report):', '') || '';
+  const new_due = new Date(dateStr.trim()+'T23:59:00').toISOString();
+  try{
+    await workerCall({ action:'ext_resolve', id, decision:'granted', new_due, note: note.trim() });
+    alert('Extension granted.');
+    loadEditorDash();
+  }catch(e){ alert('Could not grant extension: ' + e.message); }
+}
+// Adviser denies a request with an optional note the student sees.
+async function denyExtension(id){
+  const note = prompt('Reason for denying (the student will see this):', '') || '';
+  try{
+    await workerCall({ action:'ext_resolve', id, decision:'denied', note: note.trim() });
+    alert('Request denied.');
+    loadEditorDash();
+  }catch(e){ alert('Could not deny: ' + e.message); }
 }
 
 // ── EDITOR DASHBOARD ──────────────────────────────────────────────────────────
@@ -1120,16 +1229,20 @@ async function loadEditorDash() {
     document.getElementById('stat-drafts').textContent = allArticles.filter(a=>a.status==='draft').length;
     document.getElementById('stat-returned').textContent = allArticles.filter(a=>a.status==='returned').length;
   }
+  // Extensions + assignments (drive the inbox and the late badges)
+  const extMap = await getExtensionMap();
+  const assignMap = await getAssignmentMap();
+  renderExtInbox(extMap, assignMap, allArticles || []);
+
   if (!data || data.length === 0) {
     queue.innerHTML = '<div class="empty">No articles pending review. Nice work, editors.</div>';
     return;
   }
-  const dueMap = await getAssignmentDueMap();
   queue.innerHTML = data.map(a => `
     <div class="queue-item">
       <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
       <div class="q-info">
-        <div class="q-hed">${a.headline || 'Untitled'}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id]))}</div>
+        <div class="q-hed">${a.headline || 'Untitled'}${lateBadgeHTML(lateInfoFor(a, assignMap[a.assignment_id] && assignMap[a.assignment_id].due_date, extMap[a.id]))}</div>
         <div class="q-meta">${a.author_name} · ${a.section} · Submitted ${formatDate(a.submitted_at)}</div>
       </div>
       <span class="status-pill s-pending">Pending</span>
@@ -1137,6 +1250,33 @@ async function loadEditorDash() {
         <button class="btn btn-sm" onclick="openReview('${a.id}')">Review</button>
       </div>
     </div>`).join('');
+}
+
+// Adviser-only inbox of pending "more time" requests.
+function renderExtInbox(extMap, assignMap, articles){
+  const box = document.getElementById('ext-inbox');
+  if(!box) return;
+  if(currentUser.role !== 'adviser'){ box.innerHTML=''; return; }
+  const artById = {}; (articles||[]).forEach(a=>{ artById[a.id]=a; });
+  const requests = Object.keys(extMap).map(k=>extMap[k]).filter(e=>e.status==='requested');
+  if(!requests.length){ box.innerHTML=''; return; }
+  box.innerHTML = '<div class="section-div">Extension Requests ('+requests.length+')</div>' +
+    requests.map(e=>{
+      const art = artById[e.article_id] || {};
+      const asg = art.assignment_id ? assignMap[art.assignment_id] : null;
+      const due = (asg && asg.due_date) ? ' · was due '+formatDate(asg.due_date) : '';
+      return `<div class="ext-req-card">
+        <div class="erc-body">
+          <div class="erc-hed">${escHtml(art.headline||'Untitled')}</div>
+          <div class="erc-meta">${escHtml(art.author_name||'Unknown student')}${asg?' · '+escHtml(asg.title):''}${due}</div>
+          <div class="erc-reason">${e.reason?('“'+escHtml(e.reason)+'”'):'(no reason given)'}</div>
+        </div>
+        <div class="erc-actions">
+          <button class="btn btn-sm btn-success" onclick="grantExtension('${e.article_id}')">Grant</button>
+          <button class="btn btn-sm btn-warn" onclick="denyExtension('${e.article_id}')">Deny</button>
+        </div>
+      </div>`;
+    }).join('');
 }
 
 async function openReview(id) {
@@ -1161,8 +1301,10 @@ async function openReview(id) {
   `;
   showView('review');
   document.getElementById('topbar-title').textContent = `Reviewing: ${data.author_name}`;
+  const grantBtn = currentUser.role === 'adviser'
+    ? `<button class="btn" onclick="grantExtension('${id}')">Grant Extension</button>` : '';
   document.getElementById('topbar-actions').innerHTML =
-    '<button class="btn btn-success" onclick="publishArticle()">Publish</button><button class="btn btn-warn" onclick="returnArticle()">Return with Notes</button>';
+    '<button class="btn btn-success" onclick="publishArticle()">Publish</button><button class="btn btn-warn" onclick="returnArticle()">Return with Notes</button>' + grantBtn;
 }
 
 async function publishArticle() {
@@ -1237,7 +1379,7 @@ let writeNotes = [];
 // ── Workflow stage indicator (the chain) ──
 // Shows the reporter which step they're on and, in italics, exactly what to do.
 // status: 'new'|'draft'|'pending'|'returned'|'published'|'archived'|'trashed'
-function renderWriteStage(status, hasNotes) {
+function renderWriteStage(status, hasNotes, ctx) {
   const box = document.getElementById('write-stage');
   if (!box) return;
   const labels = ['Rough Draft', 'Editor Review', 'Revisions', 'Published'];
@@ -1274,7 +1416,21 @@ function renderWriteStage(status, hasNotes) {
     }
     steps += `<div class="stage-step ${cls}"><span class="sdot">${n < active ? '✓' : n}</span>${labels[i]}</div>`;
   }
-  box.innerHTML = `<div class="stage-steps">${steps}</div><div class="stage-guide">${guide}</div>`;
+  let extLine = '';
+  ctx = ctx || {};
+  const ext = ctx.extRow;
+  if (ext && ext.status) {
+    if (ext.status === 'granted') {
+      extLine = `<div class="stage-guide" style="margin-top:8px;">✓ <strong>Ms. Novello gave you extra time${ext.new_due ? ' until ' + formatDate(ext.new_due) : ''}.</strong>${ext.note ? ' Note: ' + escHtml(ext.note) : ''}</div>`;
+    } else if (ext.status === 'requested') {
+      extLine = `<div class="stage-guide" style="margin-top:8px;">⏳ <strong>More time requested.</strong> Waiting for Ms. Novello to respond — check your dashboard.</div>`;
+    } else if (ext.status === 'denied') {
+      extLine = `<div class="stage-guide" style="margin-top:8px;">✗ <strong>Extension not granted.</strong>${ext.note ? ' ' + escHtml(ext.note) : ''}</div>`;
+    }
+  } else if (ctx.assignmentLinked && status !== 'published') {
+    extLine = `<div style="margin-top:8px;"><button class="btn btn-sm" onclick="requestExtension()">Request more time</button></div>`;
+  }
+  box.innerHTML = `<div class="stage-steps">${steps}</div><div class="stage-guide">${guide}</div>${extLine}`;
 }
 
 // ── Reporter-side note checkboxes ──
@@ -1480,6 +1636,7 @@ async function loadAllArticles() {
   if (!data || data.length === 0) { list.innerHTML = '<div class="empty">No articles yet.</div>'; return; }
   const isEditor = currentUser.role === 'editor' || currentUser.role === 'adviser';
   const dueMap = await getAssignmentDueMap();
+  const extMap = await getExtensionMap();
   list.innerHTML = `<div class="toast toast-success" id="articles-toast"></div>
     <div class="section-div">All Articles (${data.length})</div>` +
     data.map(a => {
@@ -1503,7 +1660,7 @@ async function loadAllArticles() {
       return `<div class="queue-item">
         <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
         <div class="q-info">
-          <div class="q-hed">${a.headline || 'Untitled draft'}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id]))}</div>
+          <div class="q-hed">${a.headline || 'Untitled draft'}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id], extMap[a.id]))}${extStatusHTML(extMap[a.id])}</div>
           <div class="q-meta">${a.author_name} · ${a.section||'—'} · ${formatDate(a.created_at)}${a.status==='published' && a.takedown_at ? ` · <span style=\"color:var(--warn);font-weight:500;\">comes down ${formatDate(a.takedown_at)}</span>` : ''}</div>
         </div>
         <span class="status-pill s-${a.status}">${a.status}</span>
