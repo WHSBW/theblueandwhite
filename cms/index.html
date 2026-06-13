@@ -162,6 +162,9 @@
     .stage-sep.done{background:#9ec7e8;}
     .stage-guide{font-style:italic;font-size:13.5px;color:var(--text-mid,#555);line-height:1.55;}
     .stage-guide strong{font-style:normal;color:var(--navy,#16243d);}
+    /* ── Late flags ── */
+    .late-badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:3px;background:#fdecc8;color:#8a5a00;margin-left:6px;letter-spacing:.02em;white-space:nowrap;}
+    .late-badge.late-locked{background:#fbe0de;color:#b02a1e;}
 
     /* ANALYTICS */
     .risk-badge{font-size:10px;font-weight:600;padding:3px 10px;border-radius:2px;text-transform:uppercase;letter-spacing:0.06em;flex-shrink:0;}
@@ -530,6 +533,8 @@
   </div>
 </div>
 
+<!-- Shared late-policy settings (school calendar + penalty knobs). Edit that one file to change policy. -->
+<script src="/assets/js/late-policy-settings.js"></script>
 <script>
 // v4: This file contains NO database credentials. Every data operation goes
 // through the Cloudflare Worker with the user's session token.
@@ -908,6 +913,8 @@ async function loadReporterDash() {
     }).join('');
   }
   const mList = document.getElementById('my-articles-list');
+  const dueMap = {};
+  (assignments||[]).forEach(a => { if (a.due_date) dueMap[a.id] = a.due_date; });
   if (!articles || articles.length === 0) {
     mList.innerHTML = '<div class="empty">No articles yet. Hit Write Article to get started.</div>';
   } else {
@@ -915,7 +922,7 @@ async function loadReporterDash() {
       <div class="queue-item" onclick="loadArticleForEdit('${a.id}')">
         <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
         <div class="q-info">
-          <div class="q-hed">${a.headline || 'Untitled draft'}</div>
+          <div class="q-hed">${a.headline || 'Untitled draft'}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id]))}</div>
           <div class="q-meta">${a.section || '—'} · ${formatDate(a.created_at)}</div>
         </div>
         <span class="status-pill s-${a.status}">${a.status}</span>
@@ -1003,6 +1010,19 @@ async function saveDraft() {
 async function submitArticle() {
   const payload = getArticlePayload('pending');
   if (!payload) return;
+  // Late lockout: reporters can't submit more than maxLateDays school days past
+  // an assignment's due date. Advisers/editors are never locked — that's the override.
+  if (currentUser.role === 'reporter' && payload.assignment_id) {
+    const asg = assignmentsCache.find(x => x.id === payload.assignment_id);
+    if (asg && asg.due_date) {
+      const pol = _latePolicy();
+      const days = schoolDaysLate(asg.due_date, new Date().toISOString());
+      if (days > pol.maxLateDays) {
+        alert(`This assignment is more than ${pol.maxLateDays} school days past its due date, so it can't be submitted here anymore.\n\nPlease talk to Ms. Novello — she can still accept it for you.`);
+        return;
+      }
+    }
+  }
   payload.submitted_at = new Date().toISOString();
   try {
     const r = await workerCall({ action: 'art_save', id: currentArticleId || undefined, fields: payload });
@@ -1035,6 +1055,50 @@ function getArticlePayload(status) {
   };
 }
 
+// ── LATE TRACKING (school-day aware) ──────────────────────────────────────────
+// Reads NO_SCHOOL_DAYS / LATE_POLICY from /assets/js/late-policy-settings.js.
+// Degrades gracefully (weekends-only, 10%/day, lock at 3) if that file is missing.
+function _noSchool(){ return (typeof NO_SCHOOL_DAYS !== 'undefined') ? NO_SCHOOL_DAYS : []; }
+function _latePolicy(){ return (typeof LATE_POLICY !== 'undefined') ? LATE_POLICY : { percentPerDay:10, maxLateDays:3 }; }
+function _ymd(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function _isSchoolDay(d){ const w=d.getDay(); if(w===0||w===6) return false; return !_noSchool().includes(_ymd(d)); }
+// School days strictly AFTER the due day, up to & including the reference day.
+function schoolDaysLate(dueISO, refISO){
+  if(!dueISO) return 0;
+  const due=new Date(dueISO), ref=refISO?new Date(refISO):new Date();
+  const d=new Date(due.getFullYear(),due.getMonth(),due.getDate());
+  const e=new Date(ref.getFullYear(),ref.getMonth(),ref.getDate());
+  if(e<=d) return 0;
+  let n=0; const cur=new Date(d); cur.setDate(cur.getDate()+1);
+  while(cur<=e){ if(_isSchoolDay(cur)) n++; cur.setDate(cur.getDate()+1); }
+  return n;
+}
+// Build {assignmentId: due_date} for joining articles to their deadlines.
+async function getAssignmentDueMap(){
+  const map={};
+  try{
+    const r=await workerCall({ action:'assign_list' });
+    (r.rows||[]).forEach(a=>{ if(a.due_date) map[a.id]=a.due_date; });
+  }catch(e){ console.error('due map failed:', e.message); }
+  return map;
+}
+// Late info for one article given its assignment's due date.
+function lateInfoFor(article, dueISO){
+  if(!dueISO || !article.assignment_id) return null; // free-write or no deadline
+  const refISO = article.submitted_at || new Date().toISOString();
+  const days = schoolDaysLate(dueISO, refISO);
+  if(days<=0) return { late:false, days:0 };
+  const pol=_latePolicy();
+  return { late:true, days, penalty: days*pol.percentPerDay, locked: days>pol.maxLateDays, submitted: !!article.submitted_at };
+}
+function lateBadgeHTML(info){
+  if(!info || !info.late) return '';
+  const word = info.days>1 ? 'school days' : 'school day';
+  if(info.locked) return `<span class="late-badge late-locked" title="More than ${_latePolicy().maxLateDays} school days past due">⚠ Past deadline · ${info.days} ${word}</span>`;
+  const tense = info.submitted ? 'late' : 'overdue';
+  return `<span class="late-badge" title="${info.penalty}% late penalty at ${_latePolicy().percentPerDay}%/school day">⏰ ${info.days} ${word} ${tense} · −${info.penalty}%</span>`;
+}
+
 // ── EDITOR DASHBOARD ──────────────────────────────────────────────────────────
 
 async function loadEditorDash() {
@@ -1055,11 +1119,12 @@ async function loadEditorDash() {
     queue.innerHTML = '<div class="empty">No articles pending review. Nice work, editors.</div>';
     return;
   }
+  const dueMap = await getAssignmentDueMap();
   queue.innerHTML = data.map(a => `
     <div class="queue-item">
       <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
       <div class="q-info">
-        <div class="q-hed">${a.headline || 'Untitled'}</div>
+        <div class="q-hed">${a.headline || 'Untitled'}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id]))}</div>
         <div class="q-meta">${a.author_name} · ${a.section} · Submitted ${formatDate(a.submitted_at)}</div>
       </div>
       <span class="status-pill s-pending">Pending</span>
@@ -1409,6 +1474,7 @@ async function loadAllArticles() {
   const list = document.getElementById('all-articles-list');
   if (!data || data.length === 0) { list.innerHTML = '<div class="empty">No articles yet.</div>'; return; }
   const isEditor = currentUser.role === 'editor' || currentUser.role === 'adviser';
+  const dueMap = await getAssignmentDueMap();
   list.innerHTML = `<div class="toast toast-success" id="articles-toast"></div>
     <div class="section-div">All Articles (${data.length})</div>` +
     data.map(a => {
@@ -1432,7 +1498,7 @@ async function loadAllArticles() {
       return `<div class="queue-item">
         <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
         <div class="q-info">
-          <div class="q-hed">${a.headline || 'Untitled draft'}</div>
+          <div class="q-hed">${a.headline || 'Untitled draft'}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id]))}</div>
           <div class="q-meta">${a.author_name} · ${a.section||'—'} · ${formatDate(a.created_at)}${a.status==='published' && a.takedown_at ? ` · <span style=\"color:var(--warn);font-weight:500;\">comes down ${formatDate(a.takedown_at)}</span>` : ''}</div>
         </div>
         <span class="status-pill s-${a.status}">${a.status}</span>
