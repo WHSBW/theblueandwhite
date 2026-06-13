@@ -13,14 +13,14 @@
 | Hosting | GitHub Pages (free, public repo) |
 | Domain registrar | Namecheap (CNAME points to GitHub Pages) |
 | Backend database | Supabase (project ID: `cybjclqcdmrjhoaoiund`) |
-| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.2** |
+| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.3** |
 | CMS URL | https://blueandwhitewhs.com/cms/ |
 | Deployment | Local OneDrive git clone → GitHub Desktop commit/push; Pages builds in ~1 min, CDN up to ~10 min |
 | Stack | Vanilla HTML / CSS / JavaScript — no frameworks |
 
 ---
 
-## Architecture (v4.2 — June 13, 2026)
+## Architecture (v4.3 — June 13, 2026)
 
 ```
 Reporter/Editor (browser)
@@ -56,6 +56,7 @@ changes are authenticated and version-controlled in git.
 | articles table | RLS enabled; anon policy = SELECT where status='published' ONLY; no anon writes (homepage defacement via DB closed) |
 | assignments table | RLS enabled, no policies — Worker-only |
 | **extensions table** | **RLS enabled, NO policies — Worker-only. Holds student extension reasons + adviser notes (possible health/IEP info), deliberately kept OFF the articles table so it can never be read through the public published-article policy.** |
+| **edit_locks table** *(v4.3)* | **RLS enabled, NO policies — Worker-only. Holds who-opened-what-when for the soft edit-lock warning; editor/reporter names never touch the articles row, so they don't leak via the public key.** |
 | Sessions | 12-hour expiry, purged nightly, killed instantly on staff removal |
 | Reporter isolation | Server-enforced: reporters can only read/write their OWN articles (incl. extension requests + reads) |
 | Note content | HTML-escaped on render (student-editor XSS closed) |
@@ -116,6 +117,11 @@ article_id (PK) · status ('requested'/'granted'/'denied') · new_due
 (timestamptz; the granted new due date) · reason (student's, private) · note
 (adviser's, private) · decided_by · decided_at. One row per article; upserted.
 
+### edit_locks  *(NEW v4.3 — private, Worker-only)*
+article_id (PK) · editor_id · editor_name · opened_at. One row per article;
+upserted on every open. A lock older than 10 minutes is ignored (no cleanup
+needed). Powers the soft "someone else is in here" warning.
+
 ### Cumulative SQL run (for rebuild reference)
 ```sql
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS photo_url TEXT;            -- 6/5
@@ -142,12 +148,17 @@ CREATE TABLE IF NOT EXISTS extensions (
   article_id text PRIMARY KEY, status text, new_due timestamptz,
   reason text, note text, decided_by text, decided_at timestamptz DEFAULT now());
 ALTER TABLE extensions ENABLE ROW LEVEL SECURITY;
+-- 6/13 — private edit_locks table (RLS on, NO policies = Worker-only):
+CREATE TABLE IF NOT EXISTS edit_locks (
+  article_id text PRIMARY KEY, editor_id text, editor_name text,
+  opened_at timestamptz DEFAULT now());
+ALTER TABLE edit_locks ENABLE ROW LEVEL SECURITY;
 -- Emergency rollback pattern: ALTER TABLE <t> DISABLE ROW LEVEL SECURITY;
 ```
 
 ---
 
-## Cloudflare Worker (v4.2)
+## Cloudflare Worker (v4.3)
 
 Secrets (type Secret): `GITHUB_TOKEN`, `SUPABASE_SERVICE_KEY`.
 Cron: `0 9 * * *` → nightly sweep.
@@ -177,6 +188,7 @@ Don't investigate dead tokens; re-mint.
 | **ext_request** *(v4.2)* | any | reporter (own article) requests more time → extensions row {status:'requested', reason} |
 | **ext_resolve** *(v4.2)* | **adviser** | grant/deny → {status, new_due, note}; preserves student reason |
 | **ext_list** *(v4.2)* | any | editors/adviser get all extensions; reporters get only their own articles' |
+| **lock_touch** *(v4.3)* | any | stamps who-opened-when on an article; returns {warn:{name,at}} if someone else opened it within 10 min. Warn-only, never blocks. |
 
 ### Nightly sweep
 1. Auto-takedowns (published + takedown_at passed → GitHub file removed →
@@ -237,6 +249,13 @@ sessionStorage (`bw_session`). Loads `/assets/js/late-policy-settings.js`
   article's effective due date, so late math + lockout recompute automatically
   (badge flips to "✓ extended"). Reasons/notes stored privately (extensions
   table) for the future weekly report.
+- **Soft edit-lock (warn-only):** opening an article (writer OR review pane)
+  stamps who-opened-when. If someone else opened the same article within 10
+  minutes, a dismissible yellow banner warns the second person ("X opened this
+  about N minutes ago… whoever saves last wins"). Nobody is blocked — by design.
+  Catches the real collision: reporter writing while adviser/editor reviews the
+  same piece. Locks age out after 10 min (no cleanup). Stored in the private
+  edit_locks table (names never reach the public site).
 - **Review:** notes are a persistent thread (author + timestamp), shown to
   reporter in full and carried across rounds; Return sweeps any text in the note
   box into the thread; requires ≥1 note. Editors can Review ANY status from All
@@ -323,8 +342,6 @@ sessionStorage (`bw_session`). Loads `/assets/js/late-policy-settings.js`
 ## Backlog / Wishlist (none blocking)
 
 **Education features (next arc):**
-- **Soft edit-lock** — "X opened this draft N min ago" warning (last unbuilt
-  piece of the classroom-reality sprint; cheap, useful).
 - **Assignment Reports + CSV export** — one row per student per assignment
   (on time / N days late / penalty / status), Export-to-Excel button for Canvas;
   pulls in extension notes; natural pairing with rubric grading (add AI-score
@@ -354,7 +371,8 @@ timeline tool (v1 shipped June 2026).
 
 **Shipped (removed from backlog):** note resolution checkboxes ✓ (v4.1);
 due-date/late flags ✓ (v4.2); per-article extension/override ✓ (v4.2, exceeded
-original "late flags" scope).
+original "late flags" scope); soft edit-lock ✓ (v4.3). The "classroom-reality
+sprint" (chain + late flags + extensions + edit-lock) is COMPLETE.
 
 ---
 
@@ -370,9 +388,10 @@ original "late flags" scope).
 | June 11 PM | **Worker v4: CMS fully credential-free** — session-authenticated data ops, reporters server-scoped; articles+assignments RLS sealed; persistent timestamped note threads; assignment↔article linkage + progress cards; assignment editing; review for all statuses |
 | June 12 | **v4.1:** note done-checkboxes (note_toggle) + blue highlight system w/ publish-time stripping; reporter HL button same day |
 | June 13 | **The chain** (mandatory review round before publish + student stepper/guidance); **late flags** (school-day-aware badges + 3-day lockout, settings file w/ HCPS 26–27 calendar); **carousel fix** (style.css slide-width blowout); resubmit-lockout bug fixed; **v4.2 extensions** — private table, student "request more time" + adviser-only grant/deny + review-pane override, effective-due recompute |
+| June 13 (eve) | **v4.3 soft edit-lock** — warn-only "someone else is in here" banner in writer + review pane, private edit_locks table, 10-min window. Classroom-reality sprint complete. |
 
 ---
 
-*Updated June 13, 2026 — v4.2. Local Shrimp has now attended a Noah Kahan
+*Updated June 13, 2026 — v4.3. Local Shrimp has now attended a Noah Kahan
 concert, so the prophecy of the last footer is fulfilled. The next entry should
 be written by someone who has visited the Lobster Casino (responsibly). 🦞*
