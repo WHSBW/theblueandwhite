@@ -344,6 +344,13 @@
               <input class="form-input" id="w-credit" type="text" placeholder="Photo by First Last">
             </div>
           </div>
+          <div class="form-group" id="proof-section" style="margin-top:16px;">
+            <label class="form-label">Interview proof <span style="color:var(--text-muted);font-weight:400;">(optional — screenshots of texts, your Notes app, or a voice-memo transcript; images only, kept private, never published)</span></label>
+            <div id="proof-thumbs" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:10px;"></div>
+            <input type="file" id="proof-file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" style="display:none;" onchange="uploadProof(this)">
+            <button class="btn btn-sm" type="button" onclick="document.getElementById('proof-file').click()">+ Add interview proof</button>
+            <span id="proof-hint" style="font-size:11px;color:var(--text-muted);margin-left:8px;"></span>
+          </div>
           <div id="returned-notes-section" style="display:none;">
             <div class="section-div" style="margin-top:16px;">Editor Notes</div>
             <div id="returned-notes-content"></div>
@@ -423,6 +430,10 @@
               <div style="margin-top:12px;padding:12px;background:var(--silver-pale);border-radius:2px;">
                 <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">Writing Analytics</div>
                 <div class="metrics-grid" id="rv-metrics"></div>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="section-div" style="margin-top:0;">Interview Proof</div>
+                <div id="rv-proofs" style="display:flex;flex-wrap:wrap;gap:12px;"></div>
               </div>
             </div>
             <div>
@@ -1002,6 +1013,7 @@ function initWriteView() {
   document.getElementById('returned-notes-section').style.display = 'none';
   document.getElementById('w-wc').textContent = '0 words';
   writeNotes = [];
+  clearProofThumbs();
   renderWriteStage('new', false);
   resetTracking();
 }
@@ -1012,6 +1024,7 @@ async function loadArticleForEdit(id) {
   showView('write'); // switch (and form-wipe) FIRST, then populate
   currentArticleId = id;
   currentArticleStatus = data.status || 'draft';
+  loadProofs(id, 'proof-thumbs', true);
   checkEditLock(id, 'lock-warn-write');
   document.getElementById('w-hed').value = data.headline || '';
   document.getElementById('w-dek').value = data.dek || '';
@@ -1329,6 +1342,7 @@ async function openReview(id) {
   if (!data) return;
   currentArticleId = id;
   checkEditLock(id, 'lock-warn-review');
+  loadProofs(id, 'rv-proofs', true);
   document.getElementById('rv-hed').value = data.headline || '';
   document.getElementById('rv-dek').value = data.dek || '';
   document.getElementById('rv-photo').value = data.photo_url || '';
@@ -2242,13 +2256,14 @@ async function runReport() {
   if (!id) { if (wrap) wrap.innerHTML = ''; return; }
   if (wrap) wrap.innerHTML = '<div class="loading">Building report…</div>';
 
-  let amap, extMap, allArticles, staff;
+  let amap, extMap, allArticles, staff, proofsAll;
   try {
-    [amap, extMap, allArticles, staff] = await Promise.all([
+    [amap, extMap, allArticles, staff, proofsAll] = await Promise.all([
       getAssignmentMap(),
       getExtensionMap(),
       artRead({}),                                  // adviser: every article
-      workerCall({ action:'staff_list' }).then(r=>r.staff||[]).catch(()=>[])
+      workerCall({ action:'staff_list' }).then(r=>r.staff||[]).catch(()=>[]),
+      workerCall({ action:'proof_list' }).then(r=>r.rows||[]).catch(()=>[])
     ]);
   } catch (e) {
     if (wrap) wrap.innerHTML = '<div style="color:#b00;">Could not build report: '+escHtml(e.message)+'</div>';
@@ -2261,6 +2276,8 @@ async function runReport() {
 
   const numById = {};
   staff.forEach(u=>{ numById[String(u.id)] = u.student_number || ''; });
+  const hasProof = {};
+  (proofsAll||[]).forEach(pr=>{ hasProof[String(pr.article_id)] = true; });
 
   const matched = (allArticles||[])
     .filter(a => String(a.assignment_id) === String(id) && a.status !== 'trashed')
@@ -2279,6 +2296,7 @@ async function runReport() {
       late: _lateText(info),
       extension: _extText(ext),
       published: (a.status === 'published') ? ('Yes'+(a.published_at?' ('+formatDate(a.published_at)+')':'')) : 'No',
+      proof: hasProof[String(a.id)] ? 'Yes' : 'No',
       _info: info, _ext: ext
     };
   });
@@ -2313,15 +2331,16 @@ function _renderReportTable(rows, meta, minWords){
   const submittedCount = rows.filter(r=>r.submitted).length;
   const lateCount = rows.filter(r=>r._info && r._info.late).length;
   const pubCount = rows.filter(r=>r.published.indexOf('Yes')===0).length;
+  const proofCount = rows.filter(r=>r.proof==='Yes').length;
 
   let html = '';
   html += '<div class="section-div">'+escHtml(meta.title)+(meta.due?' · due '+formatDate(meta.due):'')+'</div>';
   html += '<div style="color:#777;font-size:13px;margin:-6px 0 14px;">'+
-    rows.length+' reporter'+(rows.length>1?'s':'')+' · '+submittedCount+' submitted · '+lateCount+' late · '+pubCount+' published</div>';
+    rows.length+' reporter'+(rows.length>1?'s':'')+' · '+submittedCount+' submitted · '+lateCount+' late · '+pubCount+' published · '+proofCount+' with proof</div>';
   html += '<button class="btn" onclick="downloadReportCSV()" style="margin-bottom:14px;">⤓ Download CSV</button>';
   html += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:14px;">';
   html += '<thead><tr>'+
-    ['Reporter','Student #','Status','Words','Submitted','Late','Extension','Published']
+    ['Reporter','Student #','Status','Words','Submitted','Late','Extension','Published','Interview Proof']
       .map(h=>'<th style="text-align:left;padding:8px 10px;border-bottom:2px solid #e2e2e2;white-space:nowrap;">'+h+'</th>').join('')+
     '</tr></thead><tbody>';
   rows.forEach(r=>{
@@ -2336,6 +2355,7 @@ function _renderReportTable(rows, meta, minWords){
       _td(lateBadgeHTML(r._info) || '<span style="color:#aaa;">—</span>')+
       _td(extStatusHTML(r._ext) || '<span style="color:#aaa;">—</span>')+
       _td(r.published)+
+      _td(r.proof==='Yes' ? '<span style="color:#1a7f37;font-weight:600;">Yes</span>' : '<span style="color:#aaa;">No</span>')+
     '</tr>';
   });
   html += '</tbody></table></div>';
@@ -2351,12 +2371,12 @@ function _csvCell(v){
 }
 function downloadReportCSV(){
   if (!_reportRows || !_reportRows.length){ alert('Run a report first.'); return; }
-  const header = ['Reporter','Student Number','Status','Word Count','Min Words','Submitted','Late','Extension','Published'];
+  const header = ['Reporter','Student Number','Status','Word Count','Min Words','Submitted','Late','Extension','Published','Interview Proof'];
   const lines = [ header.map(_csvCell).join(',') ];
   _reportRows.forEach(r=>{
     lines.push([
       r.name, r.studentNo, r.status, r.words, r.minWords,
-      r.submitted ? formatDate(r.submitted) : '', r.late, r.extension, r.published
+      r.submitted ? formatDate(r.submitted) : '', r.late, r.extension, r.published, r.proof
     ].map(_csvCell).join(','));
   });
   const csv = lines.join('\r\n');
@@ -2371,6 +2391,105 @@ function downloadReportCSV(){
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 
+
+// ══════════════ INTERVIEW PROOF UPLOADS — CMS UI (v4.5) ══════════════
+const PROOF_MAX_MB = 8;
+const PROOF_OK_TYPES = ['image/png','image/jpeg','image/jpg','image/webp','image/heic','image/heif'];
+
+function clearProofThumbs(){
+  const box = document.getElementById('proof-thumbs');
+  if (box) box.innerHTML = '';
+  const hint = document.getElementById('proof-hint');
+  if (hint) hint.textContent = 'Save your draft first (add a headline), then you can attach proof.';
+}
+
+function _fileToB64(file){
+  return new Promise((res,rej)=>{
+    const r = new FileReader();
+    r.onload = ()=> res(String(r.result).split(',')[1] || '');
+    r.onerror = ()=> rej(new Error('Could not read the file.'));
+    r.readAsDataURL(file);
+  });
+}
+
+async function uploadProof(input){
+  const file = input && input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  if (!currentArticleId){
+    alert('Add a headline and let your draft save first — then you can attach interview proof.');
+    return;
+  }
+  const ct = (file.type||'').toLowerCase();
+  if (PROOF_OK_TYPES.indexOf(ct) === -1){
+    alert('Only image files (PNG, JPG, WEBP, HEIC) are allowed.');
+    return;
+  }
+  if (file.size > PROOF_MAX_MB*1024*1024){
+    alert('That image is larger than '+PROOF_MAX_MB+' MB. A screenshot is usually well under that.');
+    return;
+  }
+  const hint = document.getElementById('proof-hint');
+  if (hint) hint.textContent = 'Uploading…';
+  try {
+    const data_b64 = await _fileToB64(file);
+    const r = await workerCall({ action:'proof_upload', id: currentArticleId,
+      filename: file.name, content_type: ct, data_b64: data_b64 });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'Upload failed');
+    if (hint) hint.textContent = '';
+    loadProofs(currentArticleId, 'proof-thumbs', true);
+  } catch(e){
+    if (hint) hint.textContent = '';
+    alert('Could not upload: ' + (e.message||e));
+  }
+}
+
+async function loadProofs(articleId, containerId, canDelete){
+  const box = document.getElementById(containerId);
+  if (!box) return;
+  if (!articleId){ box.innerHTML = ''; return; }
+  box.innerHTML = '<span style="font-size:12px;color:#888;">Loading proof…</span>';
+  let rows = [];
+  try {
+    const r = await workerCall({ action:'proof_list', id: articleId });
+    rows = (r && r.rows) || [];
+  } catch(e){
+    box.innerHTML = '<span style="font-size:12px;color:#b00;">Could not load proof.</span>';
+    return;
+  }
+  if (!rows.length){
+    box.innerHTML = '<span style="font-size:12px;color:#aaa;">No interview proof attached yet.</span>';
+    const hint = document.getElementById('proof-hint');
+    if (hint && containerId === 'proof-thumbs') hint.textContent = '';
+    return;
+  }
+  box.innerHTML = '';
+  for (const p of rows){
+    const tile = document.createElement('div');
+    tile.style.cssText = 'position:relative;width:120px;';
+    let url = '';
+    try { const s = await workerCall({ action:'proof_view_url', proof_id: p.id }); url = (s && s.url) || ''; }
+    catch(e){ url = ''; }
+    const img = url
+      ? '<a href="'+_attr(url)+'" target="_blank" rel="noopener"><img src="'+_attr(url)+'" alt="'+_attr(p.filename||'proof')+'" style="width:120px;height:90px;object-fit:cover;border:1px solid #ddd;border-radius:3px;display:block;"></a>'
+      : '<div style="width:120px;height:90px;border:1px solid #ddd;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#aaa;text-align:center;">preview<br>unavailable</div>';
+    const del = canDelete
+      ? '<button title="Delete this proof" onclick="deleteProof(\''+p.id+'\',\''+containerId+'\')" style="position:absolute;top:-8px;right:-8px;width:22px;height:22px;border-radius:50%;border:none;background:#b00;color:#fff;cursor:pointer;font-size:14px;line-height:1;">×</button>'
+      : '';
+    const name = '<div style="font-size:10px;color:#777;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:120px;" title="'+_attr(p.filename||'proof')+'">'+escHtml(p.filename||'proof')+'</div>';
+    tile.innerHTML = img + del + name;
+    box.appendChild(tile);
+  }
+}
+
+async function deleteProof(proofId, containerId){
+  if (!confirm('Delete this interview proof? This cannot be undone.')) return;
+  try {
+    const r = await workerCall({ action:'proof_delete', proof_id: proofId });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'Delete failed');
+  } catch(e){ alert('Could not delete: ' + (e.message||e)); return; }
+  loadProofs(currentArticleId, containerId, true);
+}
 
 function formatDate(iso) {
   if (!iso) return '—';
