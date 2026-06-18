@@ -2436,7 +2436,13 @@ async function uploadProof(input){
     const r = await workerCall({ action:'proof_upload', id: currentArticleId,
       filename: file.name, content_type: ct, data_b64: data_b64 });
     if (!r || !r.ok) throw new Error((r && r.error) || 'Upload failed');
-    if (hint) hint.textContent = '';
+    if (hint) {
+      hint.textContent = 'Uploaded ✓';
+      hint.style.color = '#1a7f37';
+      hint.style.fontWeight = '600';
+      setTimeout(()=>{ if (hint.textContent === 'Uploaded ✓'){ hint.textContent=''; hint.style.color='var(--text-muted)'; hint.style.fontWeight='400'; } }, 4000);
+    }
+    showToast('write-toast', 'Interview proof uploaded — saved automatically', 'success');
     loadProofs(currentArticleId, 'proof-thumbs', true);
   } catch(e){
     if (hint) hint.textContent = '';
