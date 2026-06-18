@@ -527,6 +527,18 @@
           <button class="btn" id="dl-cancel-btn" style="display:none;margin-left:8px;" onclick="cancelAssignmentEdit()">Cancel Edit</button>
         </div>
 
+        <!-- ASSIGNMENT REPORTS (adviser only) -->
+        <div id="view-reports" class="view">
+          <div class="toast toast-success" id="report-toast"></div>
+          <div class="form-group" style="max-width:480px;">
+            <label class="form-label">Choose an assignment to report on</label>
+            <select class="form-input" id="report-pick" onchange="runReport()">
+              <option value="">Loading…</option>
+            </select>
+          </div>
+          <div id="reports-body"></div>
+        </div>
+
         <!-- PASSWORD CHANGE (all roles) -->
         <div id="view-passwd" class="view">
           <div class="toast toast-success" id="passwd-toast"></div>
@@ -826,6 +838,7 @@ const NAV_CONFIG = {
     {id:'trash', label:'Recycle Bin', icon:'♻'},
     {id:'analytics', label:'Writing Analytics', icon:'◎'},
     {id:'assignments', label:'Assignments', icon:'◷'},
+    {id:'reports', label:'Assignment Reports', icon:'▤'},
     {id:'staff', label:'Staff Manager', icon:'◈'},
     {id:'passwd', label:'Change Password', icon:'🔑'},
   ]
@@ -855,6 +868,7 @@ const VIEW_TITLES = {
   rdash:'My Dashboard', write:'Write Article', edash:'Dashboard',
   review:'Review Article', articles:'All Articles', trash:'Recycle Bin', analytics:'Writing Analytics',
   staff:'Staff Manager', assignments:'Assignments & Deadlines',
+  reports:'Assignment Reports',
   passwd:'Change Password'
 };
 
@@ -884,6 +898,7 @@ function showView(id) {
   if (id === 'analytics') loadAnalytics();
   if (id === 'staff') loadStaff();
   if (id === 'assignments') loadAssignmentsMgr();
+  if (id === 'reports') loadReports();
   if (id === 'write') initWriteView();
 }
 
@@ -2189,6 +2204,173 @@ function updateWC(edId, wcId) {
   const words = (el.innerText||'').trim().split(/\s+/).filter(w=>w).length;
   wc.textContent = words + ' word' + (words !== 1 ? 's' : '');
 }
+
+// ══════════════ ASSIGNMENT REPORTS (adviser only) ══════════════
+// Per-assignment, submitters-only. Pure client-side: reuses the late-policy +
+// extension engine and the all-articles read (advisers see everything).
+let _reportRows = null;   // computed rows for the current report (drives CSV)
+let _reportMeta = null;   // { title, due }
+
+async function loadReports() {
+  const sel = document.getElementById('report-pick');
+  const wrap = document.getElementById('reports-body');
+  _reportRows = null; _reportMeta = null;
+  if (wrap) wrap.innerHTML = '';
+  if (sel) sel.innerHTML = '<option value="">Loading assignments…</option>';
+  let amap = {};
+  try { amap = await getAssignmentMap(); }
+  catch (e) { if (sel) sel.innerHTML = '<option value="">Could not load assignments</option>'; return; }
+  const list = Object.values(amap).sort((a,b)=> String(a.due_date||'').localeCompare(String(b.due_date||'')));
+  if (!list.length) {
+    if (sel) sel.innerHTML = '<option value="">No assignments yet</option>';
+    if (wrap) wrap.innerHTML = '<div style="color:#888;padding:8px 0;">Create an assignment first, then come back to run a report.</div>';
+    return;
+  }
+  let opts = '<option value="">— Pick an assignment —</option>';
+  list.forEach(a=>{
+    const due = a.due_date ? ' (due '+formatDate(a.due_date)+')' : '';
+    opts += '<option value="'+_attr(a.id)+'">'+escHtml(a.title||'(untitled)')+escHtml(due)+'</option>';
+  });
+  if (sel) sel.innerHTML = opts;
+}
+
+async function runReport() {
+  const sel = document.getElementById('report-pick');
+  const wrap = document.getElementById('reports-body');
+  const id = sel ? sel.value : '';
+  _reportRows = null; _reportMeta = null;
+  if (!id) { if (wrap) wrap.innerHTML = ''; return; }
+  if (wrap) wrap.innerHTML = '<div class="loading">Building report…</div>';
+
+  let amap, extMap, allArticles, staff;
+  try {
+    [amap, extMap, allArticles, staff] = await Promise.all([
+      getAssignmentMap(),
+      getExtensionMap(),
+      artRead({}),                                  // adviser: every article
+      workerCall({ action:'staff_list' }).then(r=>r.staff||[]).catch(()=>[])
+    ]);
+  } catch (e) {
+    if (wrap) wrap.innerHTML = '<div style="color:#b00;">Could not build report: '+escHtml(e.message)+'</div>';
+    return;
+  }
+
+  const assignment = amap[id];
+  const dueISO = assignment ? assignment.due_date : null;
+  const minWords = (assignment && assignment.min_words) ? assignment.min_words : 0;
+
+  const numById = {};
+  staff.forEach(u=>{ numById[String(u.id)] = u.student_number || ''; });
+
+  const matched = (allArticles||[])
+    .filter(a => String(a.assignment_id) === String(id) && a.status !== 'trashed')
+    .sort((a,b)=> String(a.author_name||'').localeCompare(String(b.author_name||'')));
+
+  const rows = matched.map(a=>{
+    const ext = extMap[a.id];
+    const info = lateInfoFor(a, dueISO, ext);
+    return {
+      name: a.author_name || '(unknown)',
+      studentNo: a.author_id ? (numById[String(a.author_id)] || '') : '',
+      status: a.status || '',
+      words: a.word_count || 0,
+      minWords: minWords,
+      submitted: a.submitted_at || '',
+      late: _lateText(info),
+      extension: _extText(ext),
+      published: (a.status === 'published') ? ('Yes'+(a.published_at?' ('+formatDate(a.published_at)+')':'')) : 'No',
+      _info: info, _ext: ext
+    };
+  });
+
+  _reportRows = rows;
+  _reportMeta = { title: assignment ? (assignment.title||'Assignment') : 'Assignment', due: dueISO };
+  _renderReportTable(rows, _reportMeta, minWords);
+}
+
+function _lateText(info){
+  if (!info) return '—';
+  if (!info.late) return info.extended ? 'On time (extended)' : 'On time';
+  if (info.locked) return 'Past deadline ('+info.days+' school days)';
+  return info.days+' school day'+(info.days>1?'s':'')+' late (−'+info.penalty+'%)'+(info.extended?' (extended)':'');
+}
+function _extText(ext){
+  if (!ext || !ext.status) return '—';
+  if (ext.status==='requested') return 'Requested';
+  if (ext.status==='granted') return 'Granted'+(ext.new_due?' until '+formatDate(ext.new_due):'');
+  if (ext.status==='denied') return 'Denied';
+  return '—';
+}
+
+function _renderReportTable(rows, meta, minWords){
+  const wrap = document.getElementById('reports-body');
+  if (!wrap) return;
+  if (!rows.length){
+    wrap.innerHTML = '<div class="section-div">'+escHtml(meta.title)+(meta.due?' · due '+formatDate(meta.due):'')+'</div>'+
+      '<div style="color:#888;padding:8px 0;">No reporters have turned anything in for this assignment yet.</div>';
+    return;
+  }
+  const submittedCount = rows.filter(r=>r.submitted).length;
+  const lateCount = rows.filter(r=>r._info && r._info.late).length;
+  const pubCount = rows.filter(r=>r.published.indexOf('Yes')===0).length;
+
+  let html = '';
+  html += '<div class="section-div">'+escHtml(meta.title)+(meta.due?' · due '+formatDate(meta.due):'')+'</div>';
+  html += '<div style="color:#777;font-size:13px;margin:-6px 0 14px;">'+
+    rows.length+' reporter'+(rows.length>1?'s':'')+' · '+submittedCount+' submitted · '+lateCount+' late · '+pubCount+' published</div>';
+  html += '<button class="btn" onclick="downloadReportCSV()" style="margin-bottom:14px;">⤓ Download CSV</button>';
+  html += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:14px;">';
+  html += '<thead><tr>'+
+    ['Reporter','Student #','Status','Words','Submitted','Late','Extension','Published']
+      .map(h=>'<th style="text-align:left;padding:8px 10px;border-bottom:2px solid #e2e2e2;white-space:nowrap;">'+h+'</th>').join('')+
+    '</tr></thead><tbody>';
+  rows.forEach(r=>{
+    const wordsCell = r.words + (minWords ? ' / '+minWords : '');
+    const short = (minWords && r.words < minWords);
+    html += '<tr>'+
+      _td(escHtml(r.name))+
+      _td(r.studentNo ? escHtml(r.studentNo) : '<span style="color:#aaa;">—</span>')+
+      _td('<span style="text-transform:capitalize;">'+escHtml(r.status)+'</span>')+
+      _td(short ? '<span style="color:#b4690e;" title="Below the word minimum">'+wordsCell+'</span>' : wordsCell)+
+      _td(r.submitted ? formatDate(r.submitted) : '<span style="color:#aaa;">not submitted</span>')+
+      _td(lateBadgeHTML(r._info) || '<span style="color:#aaa;">—</span>')+
+      _td(extStatusHTML(r._ext) || '<span style="color:#aaa;">—</span>')+
+      _td(r.published)+
+    '</tr>';
+  });
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
+}
+function _td(inner){ return '<td style="padding:8px 10px;border-bottom:1px solid #efefef;vertical-align:top;">'+inner+'</td>'; }
+function _attr(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+// ── CSV export ──
+function _csvCell(v){
+  v = (v===null||v===undefined) ? '' : String(v);
+  return /[",\n\r]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v;
+}
+function downloadReportCSV(){
+  if (!_reportRows || !_reportRows.length){ alert('Run a report first.'); return; }
+  const header = ['Reporter','Student Number','Status','Word Count','Min Words','Submitted','Late','Extension','Published'];
+  const lines = [ header.map(_csvCell).join(',') ];
+  _reportRows.forEach(r=>{
+    lines.push([
+      r.name, r.studentNo, r.status, r.words, r.minWords,
+      r.submitted ? formatDate(r.submitted) : '', r.late, r.extension, r.published
+    ].map(_csvCell).join(','));
+  });
+  const csv = lines.join('\r\n');
+  const stamp = new Date().toISOString().slice(0,10);
+  const safe = String(_reportMeta && _reportMeta.title ? _reportMeta.title : 'assignment')
+    .replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase() || 'assignment';
+  const blob = new Blob(['\ufeff'+csv], { type:'text/csv;charset=utf-8;' }); // BOM = Excel-friendly
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'report-'+safe+'-'+stamp+'.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+
 
 function formatDate(iso) {
   if (!iso) return '—';
