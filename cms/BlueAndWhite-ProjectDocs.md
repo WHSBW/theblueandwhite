@@ -269,6 +269,17 @@ sessionStorage (`bw_session`).
 - **Extensions:** reporter requests an extension (with a reason); adviser
   grants/denies. Adviser can also proactively override a due date from the
   review pane. Granting recomputes the effective due date for that student.
+- **Assignment Reports (adviser only, client-side):** a `reports` view. Pick an
+  assignment -> one row per reporter who linked an article to it (submitters
+  only; trashed excluded). Columns: Reporter, Student #, Status, Words (vs. min,
+  amber if short), Submitted, Late, Extension, Published, plus a summary line
+  (N reporters / submitted / late / published). Reuses the existing late +
+  extension engine (`lateInfoFor`, `getExtensionMap`, `getAssignmentMap`,
+  `lateBadgeHTML`, `extStatusHTML`) so badges match the dashboards exactly.
+  Student # comes from `staff_list` (adviser-scoped); a removed author shows by
+  byline with a blank number. **Download CSV** builds the file in-browser (BOM
+  for Excel, RFC-4180 quoting) -- no Worker/SQL/RLS touched. Functions:
+  `loadReports`, `runReport`, `_renderReportTable`, `downloadReportCSV`.
 - **Review (4-step progress tracker, client-side):** the reporter sees a visual
   4-stage tracker driven by article status — **Rough Draft** (draft) → **Editor
   Review** (pending) → **Revisions** (returned) → **Published** (published) —
@@ -362,7 +373,6 @@ sessionStorage (`bw_session`).
 ## Backlog / Next Sprint Arc
 
 **Next arc (discussed, not yet built):**
-- **Assignment Reports** with CSV export
 - **Interview proof uploads** — requires Supabase Storage
 - **Rubric grading** — rubric table + review-pane scoring; Claude API called
   from the Worker; adviser confirms before exporting to Canvas. Ties into the
@@ -394,6 +404,7 @@ sessionStorage (`bw_session`).
 | June 11 PM | **Worker v4: CMS fully credential-free** — all data ops session-authenticated; reporters server-scoped; articles+assignments RLS sealed; persistent timestamped note threads (XSS-escaped); assignment↔article linkage + progress cards + duplicate prevention; assignment editing; review for all statuses |
 | Classroom-reality sprint | **Worker v4.3** — mandatory 4-step student review chain; per-note done-checkboxes; soft edit-lock warn-only banner (writer + review pane); school-day-aware late policy (HCPS calendar, 10%/day, 3-day lockout on initial submissions, configurable); extensions system (private RLS table, student request → adviser grant/deny, review-pane override, due-date recompute); smart reporter dashboard cards; public carousel fix; magazine homepage (carousel + hero grid + section columns, shared feed engine); blue highlight system w/ publish-time stripping + HL button; trashed articles hidden from reporter dashboard |
 | June 18 | **Worker v4.4 — password hashing.** Salted PBKDF2-SHA-256 (Web Crypto, 100k iterations); transparent upgrade-on-login for legacy plain-text rows (no migration, no lockouts); `staff_add` + `change_password` hash on write; `password_hash` removed from `staff_update` allowed fields. Verified live: old password rejected, new accepted, stored value confirmed as `pbkdf2$…` hash. Last Security Model item closed. |
+| June 18 | **CMS — Assignment Reports + CSV** (adviser-only, client-side; no Worker/SQL/RLS). Per-assignment, submitters-only report table reusing the late/extension engine; in-browser CSV export (Excel BOM, proper quoting). Full role-gauntlet pass: draft→pending→returned→published tracked correctly, late flag + CSV stayed in sync after a retroactive due-date change, editors correctly see no Reports menu item. |
 
 ---
 
