@@ -2,6 +2,19 @@
 **Paul R. Wharton High School Student Newspaper**
 *For Laura Novello (adviser) and future Claude instances picking up this project*
 
+> **Version note (June 18, 2026):** This is the **v4.3** doc, rewritten after the
+> "classroom-reality sprint." It was reconstructed from session memory, not from
+> a live read of the Worker/CMS code, so items marked **⚠️ verify** should be
+> checked against the actual source before being trusted. Laura's corrections are
+> authoritative — fix anything wrong and re-save.
+>
+> **How this file stays current:** there are TWO copies — the local one at
+> `OneDrive/GitHub/theblueandwhite/cms/BlueAndWhite-ProjectDocs.md`, and the one
+> uploaded into the Claude Project's knowledge. They do NOT sync. Saving locally
+> (or pushing to GitHub) does nothing to the Project copy. To update what future
+> Claude sees, you must **delete the old file in the Project and re-upload this
+> one.** Do both whenever the doc changes.
+
 ---
 
 ## Quick Facts
@@ -15,12 +28,14 @@
 | Backend database | Supabase (project ID: `cybjclqcdmrjhoaoiund`) |
 | Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.3** |
 | CMS URL | https://blueandwhitewhs.com/cms/ |
+| Late policy config | `assets/js/late-policy-settings.js` (10% / school day) |
 | Deployment | Local OneDrive git clone → GitHub Desktop commit/push; Pages builds in ~1 min, CDN up to ~10 min |
 | Stack | Vanilla HTML / CSS / JavaScript — no frameworks |
+| HCPS 2026–27 school year | August 10, 2026 – May 28, 2027 |
 
 ---
 
-## Architecture (v4.3 — June 13, 2026)
+## Architecture (v4.3)
 
 ```
 Reporter/Editor (browser)
@@ -40,45 +55,48 @@ GitHub repo → GitHub Pages → blueandwhitewhs.com
 
 **The headline for District IT:** the CMS file contains **zero database
 credentials**. Every read and write goes through the Worker with a server-
-verified session token. The public key can read published articles and do
-nothing else — no drafts, no notes, no extensions, no writes. All site-file
-changes are authenticated and version-controlled in git.
+verified session token. The public key can read published articles and nothing
+else — no drafts, no notes, no extensions, no edit-locks, no writes. All
+site-file changes are authenticated and version-controlled in git.
 
 ---
 
-## Security Model (Phase 2 complete; extended June 13, 2026)
+## Security Model (v4.3)
 
 | Surface | State |
 |---|---|
 | GitHub token, Supabase service key | Encrypted Worker secrets only |
 | Site files (GitHub Pages) | Change requires valid editor/adviser session |
-| users + sessions tables | RLS enabled, no policies — Worker-only access; student passwords not publicly readable |
-| articles table | RLS enabled; anon policy = SELECT where status='published' ONLY; no anon writes (homepage defacement via DB closed) |
+| users + sessions tables | RLS enabled, no policies — Worker-only access |
+| articles table | RLS enabled; anon policy = SELECT where status='published' ONLY; no anon writes |
 | assignments table | RLS enabled, no policies — Worker-only |
-| **extensions table** | **RLS enabled, NO policies — Worker-only. Holds student extension reasons + adviser notes (possible health/IEP info), deliberately kept OFF the articles table so it can never be read through the public published-article policy.** |
-| **edit_locks table** *(v4.3)* | **RLS enabled, NO policies — Worker-only. Holds who-opened-what-when for the soft edit-lock warning; editor/reporter names never touch the articles row, so they don't leak via the public key.** |
+| extensions table | RLS enabled, **no anon policies** — Worker-only. Holds student-written reasons + adviser decisions (treated as sensitive personal info) |
+| edit-lock table ⚠️ verify name | RLS enabled, no anon policies — Worker-only. Holds who-opened-what-when |
 | Sessions | 12-hour expiry, purged nightly, killed instantly on staff removal |
-| Reporter isolation | Server-enforced: reporters can only read/write their OWN articles (incl. extension requests + reads) |
+| Reporter isolation | Server-enforced: reporters can only read/write their OWN articles |
 | Note content | HTML-escaped on render (student-editor XSS closed) |
 
-**Why extensions live in their own table:** anon can SELECT *all columns* of
-any `status='published'` article. A student's "I had the flu" reason or your
-"IEP accommodation" note would therefore leak the moment the article published
-if stored on the article row. The separate `extensions` table (RLS on, no anon
-policy) is unreadable by the public key entirely. Worker (service role) only.
+**Privacy-by-design principle:** extensions and edit-lock data live in
+RLS-locked private tables with **no anonymous policies** from the start —
+because student reasons and adviser notes can contain sensitive personal
+information. This is intentional, not retrofitted.
+
+**Note on testing public read access:** Laura's authenticated Supabase session
+(and the Supabase MCP) BYPASS RLS, so they can't verify what the anonymous
+public can actually read. To test public access for real, hit the REST API
+directly with the **anon/publishable key** — not the service role, not an
+authenticated session.
 
 **Remaining (wishlist-tier, not holes):** passwords stored plain-text behind
-RLS (proper hashing = future Worker-side upgrade); Worker has no rate limiting.
+RLS (proper hashing = next sprint candidate); Worker has no rate limiting.
 
 ### Permission matrix
 - **Reporter:** own articles only (write/edit/autosave/submit), see applicable
-  assignments + own progress, **request more time on own articles**, change own
-  password.
+  assignments + own progress, request extensions, change own password.
 - **Editor:** + read everything, review queue, publish/return/archive/recycle/
-  restore/delete-forever, analytics, create/edit/delete assignments. (Editors
-  do NOT see the extension-requests inbox and cannot grant/deny extensions.)
+  restore/delete-forever, analytics, create/edit/delete assignments.
 - **Adviser:** + Staff Manager, staff page publishing, add/remove logins;
-  **sole authority to grant/deny extensions**; unremovable via API.
+  grant/deny extensions; unremovable via API.
 
 ---
 
@@ -94,12 +112,8 @@ author_name) · author_name · headline · dek · body (HTML) · section ·
 photo_url/caption/credit · status (draft/pending/returned/published/archived/
 trashed) · github_path · **assignment_id** (links to assignments; '' = free
 write) · trashed_at · takedown_at · editor_notes (**JSON array** of
-{by, at, text, **done?, done_by?, done_at?**}; legacy plain text auto-wrapped) ·
+{by, at, text, **done** ⚠️ verify field name}; legacy plain text auto-wrapped) ·
 word_count + analytics columns · created/submitted/published_at
-
-*(No new article columns since v4: note done-flags live inside the existing
-editor_notes JSON; late status is derived, not stored; extensions are a
-separate table.)*
 
 ### users
 id · name · student_number · password_hash (plain text, RLS-locked) · role ·
@@ -112,22 +126,22 @@ token (PK) · user_id · name · role · created_at · expires_at (+12h)
 id · title · due_date · assigned_to ('all' or section) · min_words ·
 instructions · created_by
 
-### extensions  *(NEW v4.2 — private, Worker-only)*
-article_id (PK) · status ('requested'/'granted'/'denied') · new_due
-(timestamptz; the granted new due date) · reason (student's, private) · note
-(adviser's, private) · decided_by · decided_at. One row per article; upserted.
+### extensions ⚠️ verify exact columns
+id · article_id (or assignment_id + student) · student_number · requested_at ·
+reason (student-written) · status (pending/granted/denied) · new_due_date ·
+decided_by · decided_at. **Private — no anon policies.**
 
-### edit_locks  *(NEW v4.3 — private, Worker-only)*
-article_id (PK) · editor_id · editor_name · opened_at. One row per article;
-upserted on every open. A lock older than 10 minutes is ignored (no cleanup
-needed). Powers the soft "someone else is in here" warning.
+### edit-lock ⚠️ verify table + columns
+Tracks which user last opened a given draft and when, to power the soft
+"X opened this N min ago" warn-only banner. **Private — no anon policies.**
 
-### Cumulative SQL run (for rebuild reference)
+### Cumulative SQL (v4 baseline + v4.3 additions)
 ```sql
-ALTER TABLE articles ADD COLUMN IF NOT EXISTS photo_url TEXT;            -- 6/5
-ALTER TABLE articles ADD COLUMN IF NOT EXISTS trashed_at timestamptz;    -- 6/10
+-- v4 baseline (already run)
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS photo_url TEXT;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS trashed_at timestamptz;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS takedown_at timestamptz;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS title text;                   -- 6/11
+ALTER TABLE users ADD COLUMN IF NOT EXISTS title text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS grade text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS bio text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS beats text;
@@ -143,16 +157,13 @@ ALTER TABLE articles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "public read published" ON articles
   FOR SELECT TO anon USING (status = 'published');
 ALTER TABLE assignments ENABLE ROW LEVEL SECURITY;
--- 6/13 — private extensions table (RLS on, NO policies = Worker-only):
-CREATE TABLE IF NOT EXISTS extensions (
-  article_id text PRIMARY KEY, status text, new_due timestamptz,
-  reason text, note text, decided_by text, decided_at timestamptz DEFAULT now());
-ALTER TABLE extensions ENABLE ROW LEVEL SECURITY;
--- 6/13 — private edit_locks table (RLS on, NO policies = Worker-only):
-CREATE TABLE IF NOT EXISTS edit_locks (
-  article_id text PRIMARY KEY, editor_id text, editor_name text,
-  opened_at timestamptz DEFAULT now());
-ALTER TABLE edit_locks ENABLE ROW LEVEL SECURITY;
+
+-- v4.3 additions ⚠️ verify against what was actually run
+-- extensions table (private, RLS on, NO anon policy)
+-- edit-lock table  (private, RLS on, NO anon policy)
+-- editor_notes 'done' flag is stored INSIDE the existing JSON array, so no
+--   schema change was needed for note checkboxes.
+
 -- Emergency rollback pattern: ALTER TABLE <t> DISABLE ROW LEVEL SECURITY;
 ```
 
@@ -184,11 +195,13 @@ Don't investigate dead tokens; re-mint.
 | art_destroy | editor+ | permanent row delete |
 | assign_list | any | all assignments (client filters by section) |
 | assign_add/update/destroy | editor+ | assignment management |
-| **note_toggle** *(v4.1)* | any | flips done/done_by/done_at on one editor note (by index); reporters scoped to own; note text untouchable |
-| **ext_request** *(v4.2)* | any | reporter (own article) requests more time → extensions row {status:'requested', reason} |
-| **ext_resolve** *(v4.2)* | **adviser** | grant/deny → {status, new_due, note}; preserves student reason |
-| **ext_list** *(v4.2)* | any | editors/adviser get all extensions; reporters get only their own articles' |
-| **lock_touch** *(v4.3)* | any | stamps who-opened-when on an article; returns {warn:{name,at}} if someone else opened it within 10 min. Warn-only, never blocks. |
+| ext_request ⚠️ verify name | reporter | student submits an extension request (reason + target) |
+| ext_list ⚠️ verify name | any | list extension requests (adviser sees all; reporter sees own) |
+| ext_decide ⚠️ verify name | adviser | grant/deny → sets new_due_date, decided_by/at |
+
+**Note-done toggle:** ⚠️ verify whether this is a dedicated action or folded
+into `art_admin`/`art_save`. Design intent was a narrow action that flips the
+`done` flag on one note inside the editor_notes JSON array.
 
 ### Nightly sweep
 1. Auto-takedowns (published + takedown_at passed → GitHub file removed →
@@ -202,177 +215,129 @@ Don't investigate dead tokens; re-mint.
 
 No supabase-js, no keys. `workerCall()` attaches the session token to every
 request; `artRead()` wraps reads. Session persists across refresh via
-sessionStorage (`bw_session`). Loads `/assets/js/late-policy-settings.js`
-(school calendar + penalty knobs) before the main script.
+sessionStorage (`bw_session`).
 
 ### Newsroom flows
 - **Write:** draft → autosave (3s after typing; requires headline; REFUSES to
   save an empty body over an existing article) → submit. Articles may be tied
   to an assignment via the writer dropdown (saved to assignment_id).
-- **The chain (mandatory review round):** an article CANNOT be published until
-  it has been returned with ≥1 editor note at least once. The Publish button
-  blocks otherwise ("hasn't been through a review round yet"). Even a flawless
-  first draft gets one round-trip. A 4-step stepper (Rough Draft → Editor
-  Review → Revisions → Published) + italic, status-aware guidance shows the
-  reporter exactly what to do next — cuts down "is it up yet?" questions.
-- **Note checkboxes:** every editor note shows "Mark as done" to the reporter;
-  checking stamps ✓ Done by [name] · [date], dims + strikes it; unchecking
-  works. Editors see the same badges in the review thread (read-only there;
-  thread is a local snapshot — reopen to refresh). Stored in editor_notes JSON.
-- **Blue highlights:** HL button (#CFE8FF) in BOTH toolbars — editors mark live
-  edits for the reporter; reporters mark placeholders ("INSERT INTERVIEW
-  HERE"). HL✕ wipes all highlights. Publish auto-strips every highlight/
-  background-color, so the live site never shows blue (also nukes Google-Docs
-  paste backgrounds). DB copy the reporter sees keeps them.
-- **Assignments:** adviser/editor creates AND EDITS. Reporter dashboard cards
-  show per-kid progress (Write / Draft in progress / Submitted ✓ / Returned —
-  see notes / Published ✓), the due/late status, and extension status/Request.
-  Clicking an assignment with an existing article opens THAT article.
-- **Late flags (school-day aware):** for assignment-linked articles, badges show
-  how many SCHOOL days late + penalty (e.g. "⏰ 2 school days late · −20%"),
-  red "⚠ Past deadline" past the window. Skips weekends AND every HCPS
-  no-school day from `late-policy-settings.js`. Free-writes/on-time = no badge.
-  Penalty is informational for now (grade application waits for rubric sprint).
-  Knobs (10%/day, 3-day lock, the holiday list) all live in that one settings
-  file — edit it, both the CMS and any future consumer pick it up.
-- **Late lockout:** a reporter cannot submit a BRAND-NEW article more than 3
-  school days past due ("talk to Ms. Novello"). Applies to INITIAL submissions
-  only — resubmissions of already-returned work are NEVER blocked (finish the
-  loop). Advisers/editors are never locked (that's the override). Enforced
-  client-side (fine for non-adversarial students; could harden in Worker later).
-- **Extensions (request + override):** reporter clicks "Request more time"
-  (dashboard card or write view), types a reason → adviser-only "Extension
-  Requests" inbox on the editor dashboard (student, assignment, reason, Grant/
-  Deny). Grant asks a new due date (pre-filled +3 days) + optional private note;
-  Deny asks a note the student sees. Adviser can also "Grant Extension" straight
-  from the review pane ("you have a day"). A granted extension becomes the
-  article's effective due date, so late math + lockout recompute automatically
-  (badge flips to "✓ extended"). Reasons/notes stored privately (extensions
-  table) for the future weekly report.
-- **Soft edit-lock (warn-only):** opening an article (writer OR review pane)
-  stamps who-opened-when. If someone else opened the same article within 10
-  minutes, a dismissible yellow banner warns the second person ("X opened this
-  about N minutes ago… whoever saves last wins"). Nobody is blocked — by design.
-  Catches the real collision: reporter writing while adviser/editor reviews the
-  same piece. Locks age out after 10 min (no cleanup). Stored in the private
-  edit_locks table (names never reach the public site).
-- **Review:** notes are a persistent thread (author + timestamp), shown to
-  reporter in full and carried across rounds; Return sweeps any text in the note
-  box into the thread; requires ≥1 note. Editors can Review ANY status from All
-  Articles — note: simultaneous editing is last-save-wins.
+- **Highlighting:** blue-highlight system with a reporter-facing **HL** button
+  for marking text during drafting/review. Highlights are **stripped at publish
+  time** so they never reach the live site.
+- **Assignments:** adviser/editor creates AND EDITS (✎ Edit fills the form,
+  Save Changes / Cancel Edit). **Smart reporter dashboard cards** show per-kid
+  progress on each assignment — Write (none yet) / Open + "Draft in progress" /
+  "Submitted ✓" / "Returned — see notes" / "Published ✓". Clicking an
+  assignment with an existing article opens THAT article (no duplicates).
+- **Late policy:** school-day-aware late flags using the official HCPS 2026–27
+  calendar. Penalty configurable in `assets/js/late-policy-settings.js`
+  (default **10% per school day**). **3-day lockout applies to INITIAL
+  submissions only** (not resubmissions). Effective due dates recompute when an
+  extension is granted.
+- **Extensions:** reporter requests an extension (with a reason); adviser
+  grants/denies. Adviser can also proactively override a due date from the
+  review pane. Granting recomputes the effective due date for that student.
+- **Review (mandatory 4-step student review chain ⚠️ verify exact steps):**
+  before publish, an article moves through a required multi-step student review
+  sequence. Notes are a persistent, timestamped, XSS-escaped thread (author +
+  time), shown to the reporter in full and carried across rounds. **Per-note
+  done-checkboxes** let notes be toggled resolved. Return sweeps any text left
+  in the note box into the thread; requires ≥1 note. Editors can Review ANY
+  status from All Articles, including drafts.
+- **Soft edit-lock:** warn-only banner ("X opened this draft N min ago") shown
+  in BOTH the writer and the review pane. It warns; it does not block.
+  Simultaneous editing remains last-save-wins.
 - **Publish:** review pane (optional auto-takedown date, +30 days button) →
-  Worker → GitHub → live (~1–10 min CDN). Highlights stripped on publish.
+  Worker → GitHub → live (~1–10 min CDN). Edit/republish supported.
 - **Lifecycle:** Archive (off site, re-publishable) → Recycle (30-day bin,
-  Restore / Delete Forever) → nightly purge. Every status has actions in All
-  Articles; nothing can be stranded.
-- **Staff page:** profiles → ⌂ Publish Staff Page regenerates staff.html between
+  Restore / Delete Forever) → nightly purge. Trashed articles are hidden from
+  the reporter dashboard list. Nothing can be stranded.
+- **Staff page:** profiles (title/grade/bio/beats/photo/section incl.
+  Leadership/visibility) → ⌂ Publish Staff Page regenerates staff.html between
   its BW: markers (keep those markers!). Removing a student severs access
   instantly; bylines survive.
 
+### Public site
+- Carousel bug fixed (flex slide-width blowout).
+- Seven section landing pages.
+- Dynamic magazine homepage: carousel + hero grid + section columns, on a
+  shared feed engine.
+
 ### Known dragons slain — for future debugging context
-- **(v4.1) Worker action position:** new action blocks must sit in the MAIN
-  if-chain of handleRequest. note_toggle was once pasted INSIDE art_save's
-  if(body.id) branch → every toggle returned "Unknown action" while art_save
-  still worked. Add new actions just above `return json({error:'Unknown
-  action'}...)`. Full-file replace beats surgical paste for non-coders.
-- **(v4.2) Carousel split-in-half (public site):** `.carousel-slide` used
-  `min-width:100%` — a *floor*, not a ceiling — so a slide with a long headline
-  sized to its content (one unwrapped line), blew past the column, and the
-  translateX(idx*100%) stepping drifted → titles clipped, slides half-shown.
-  Fix: `flex:0 0 100%; max-width:100%; min-width:0` on `.carousel-slide` +
-  `.brief-slide`, and `min-width:0` on `.carousel-wrap` (grid items default to
-  min-width:auto and blow out their fr column). In `assets/css/style.css`.
-- **(v4.2) Resubmit trapped by lockout:** the first late-lockout blocked ALL
-  submissions, so a returned article past the window couldn't be resubmitted.
-  Fixed: lockout only fires for initial submissions (status new/draft); returned
-  work always resubmits. Tracked via `currentArticleStatus`.
-- **(v4.2) Extension privacy:** see Security Model — reasons/notes must NOT live
-  on the articles table (anon reads published rows). Separate RLS-locked table.
-- populate-then-wipe: showView('write') runs initWriteView; ANY function that
-  fills the write form must call showView FIRST.
-- initWriteView must clear every field (once skipped w-photo → "ghost lobster").
+- **showView before form population:** ANY function that fills the write form
+  must call `showView('write')` FIRST (it runs initWriteView, which clears
+  fields). Calling it after = populate-then-wipe. Recurring; watch for it.
+- initWriteView must clear EVERY field — once skipped w-photo ("ghost lobster"
+  stale data).
 - GitHub Pages CDN caches ~10 min AND negative-caches 404s — never debug a
-  "missing" change before the window passes; cache-bust with ?v=N. (A stale CMS
-  cache also masks freshly deployed logic — hard-refresh after a push.)
-- Old code swallowed failed reads silently → looked like data loss; reads now
-  alert on failure.
+  "missing" change before the window passes; cache-bust with `?v=N`.
+- Reads alert on failure (old code swallowed failed reads → looked like data
+  loss).
 
 ---
 
 ## Workflow Notes for Future Claude
 
-- Download current files before patching (repo for CMS via codeload tarball or
-  raw.githubusercontent.com; ask Laura to paste Worker from Cloudflare, OR build
-  a full-file replacement on the last known-good Worker source and flag the
-  assumption). Never patch from fuzzy memory.
-- Multi-layer deploys: **SQL → Worker → CMS → verify** (RLS/new tables first).
-  Each layer degrades gracefully if the next isn't up yet (CMS catches unknown-
-  action errors). Hard-refresh after CMS pushes.
-- The Worker commits to GitHub directly (publish, auto-takedown), so Laura's
-  local clone falls behind origin. Habit: **Fetch/Pull in GitHub Desktop BEFORE
-  editing.** LF/CRLF warnings are cosmetic line-ending differences — ignore.
-- Policy knobs (late %, lock window, no-school days) live ONLY in
-  `assets/js/late-policy-settings.js`. Change there; don't hardcode.
-- GitHub API rate limits on shared IPs: use codeload tarball or raw.
-- supabase.co is NOT reachable from the Claude container; have Laura run SQL.
-  Can't verify anon-visible columns from the container either — reason from the
-  RLS policies.
+- Download current files before patching (repo for CMS; ask Laura to paste the
+  Worker from the Cloudflare editor). **Never patch from memory.**
+- **Strict deploy order:** SQL → Worker → CMS → verify → **RLS last** (with a
+  rollback line provided). This order has caught real bugs.
+- **Role gauntlet after every deploy:** Laura runs a full multi-role test
+  (adviser + test reporter "Fable Jones", student #0000004) after each change.
+  Support it — it has caught launch-day bugs (populate-then-wipe ordering, ghost
+  stale-data, silent read failures).
+- GitHub API rate-limits on shared container IPs: use the codeload tarball
+  (`https://codeload.github.com/WHSBW/theblueandwhite/tar.gz/main`) or
+  `raw.githubusercontent.com` for individual files.
+- supabase.co is NOT reachable from the Claude container; have Laura run SQL,
+  or reason from the publishable key's minimal view. **The MCP/authenticated
+  session bypasses RLS** — to test true public read access, hit REST with the
+  anon key.
 - Tokens are disposable; regenerate rather than investigate.
-- Laura runs a full role gauntlet (adviser + a test reporter — Fable Jones, with
-  cameos from editor "Clawford Daniels") after changes — support it; it has
-  caught real bugs. Plain English first; her corrections are authoritative.
+- Plain English first; depth on request. Laura calls out jargon directly and
+  her corrections are authoritative — don't over-explain or get defensive.
+- **AI grading framing:** any AI-assisted grading is ALWAYS a *second opinion
+  Laura personally confirms* before anything leaves the system — never
+  autonomous. This is a professional/pedagogical principle, not a preference.
+- Running joke conventions: crustacean test accounts (Fable Jones, Clawford
+  Daniels) and test articles (Local Shrimp Wins Big Race, Flobster).
 
 ---
 
 ## Pre-Launch Checklist (August, before students)
 
-- [ ] Recycle/purge all test articles (the Flobster Cinematic Universe; the
-      Lobster Casino extension request; the Noah Kahan shrimp)
-- [ ] Clear test extension rows
+- [ ] Recycle/purge all test articles (the Flobster Cinematic Universe)
 - [ ] Remove/repurpose test accounts; create real roster (Staff Manager)
 - [ ] Fill staff profiles; ⌂ Publish Staff Page
-- [ ] Confirm token expiry date in this doc still future (June 1, 2027 ✓)
-- [ ] Confirm `late-policy-settings.js` matches the FINAL board calendar
-- [ ] Walk one real student through write→submit→return→resubmit→publish, plus
-      a late/extension case
+- [ ] Confirm token expiry date still future (June 1, 2027 ✓)
+- [ ] Confirm late-policy settings + HCPS calendar dates for the live year
+- [ ] Walk one real student through write→submit→return→resubmit→publish
+- [ ] Walk one extension request through request→grant→recomputed due date
 - [ ] District IT submission: this doc's Security Model + permission matrix
 
 ---
 
-## Backlog / Wishlist (none blocking)
+## Backlog / Next Sprint Arc
 
-**Education features (next arc):**
-- **Assignment Reports + CSV export** — one row per student per assignment
-  (on time / N days late / penalty / status), Export-to-Excel button for Canvas;
-  pulls in extension notes; natural pairing with rubric grading (add AI-score
-  column there). Data already flows; mostly assembly.
-- **Interview proof** — block final submit without proof (screenshot/audio),
-  except Editorials. Needs file upload → **Supabase Storage** (private bucket;
-  these are kids' text logs, NOT for the public repo). Unlocks photo upload too.
-- **Rubric grading** — rubric table + review-pane scoring panel; AI drafts the
-  score (Claude API from the Worker) with per-line reasoning, **Laura confirms**
-  before it exports (teacher = grader of record). Ties into the separate
-  OCR/Fujitsu grading-pipeline project.
+**Next arc (discussed, not yet built):**
+- **Assignment Reports** with CSV export
+- **Interview proof uploads** — requires Supabase Storage
+- **Rubric grading** — rubric table + review-pane scoring; Claude API called
+  from the Worker; adviser confirms before exporting to Canvas. Ties into the
+  separate OCR/Fujitsu grading-pipeline project.
+- **Password hashing** (Worker-side)
 
 **Platform polish:**
-- Hide trashed articles from reporter dashboard list
-- Photo upload to Supabase Storage (replaces paste-a-URL everywhere)
-- Password hashing (Worker-side)
+- Photo/asset upload to Supabase Storage (replaces paste-a-URL everywhere)
 - Editor's pick / featured homepage flag
 - More Stories on article pages; live headline ticker; Wharton Brief episodes
-- Optional: harden the late lockout server-side (Worker checks due date)
 
 **Mountains (acknowledged, not scheduled):**
-- True real-time collaborative editing (CRDT/Yjs + Supabase Realtime — soft
-  locks cover 80% at 1% of the cost).
+- True real-time collaborative editing (CRDT/Yjs + Supabase Realtime — a
+  different class of problem; soft locks cover 80% at 1% of the cost)
 
-**Separate projects:** participation tracker; grading pipeline; *Vexed*
-timeline tool (v1 shipped June 2026).
-
-**Shipped (removed from backlog):** note resolution checkboxes ✓ (v4.1);
-due-date/late flags ✓ (v4.2); per-article extension/override ✓ (v4.2, exceeded
-original "late flags" scope); soft edit-lock ✓ (v4.3). The "classroom-reality
-sprint" (chain + late flags + extensions + edit-lock) is COMPLETE.
+**Separate projects:** participation tracker; OCR/Fujitsu grading pipeline;
+*Vexed* timeline tool (interactive HTML; shipped June 2026).
 
 ---
 
@@ -385,13 +350,11 @@ sprint" (chain + late flags + extensions + edit-lock) is COMPLETE.
 | June 5 | Section pages, homepage engines, photos, autosave, image tools |
 | June 10 | Token rotated (exp 6/1/27); secrets encrypted; Recycle Bin + auto-takedown; nightly cron |
 | June 11 AM | Worker v3: server-side login, 12h sessions; staff profiles + generated staff page; users/sessions RLS |
-| June 11 PM | **Worker v4: CMS fully credential-free** — session-authenticated data ops, reporters server-scoped; articles+assignments RLS sealed; persistent timestamped note threads; assignment↔article linkage + progress cards; assignment editing; review for all statuses |
-| June 12 | **v4.1:** note done-checkboxes (note_toggle) + blue highlight system w/ publish-time stripping; reporter HL button same day |
-| June 13 | **The chain** (mandatory review round before publish + student stepper/guidance); **late flags** (school-day-aware badges + 3-day lockout, settings file w/ HCPS 26–27 calendar); **carousel fix** (style.css slide-width blowout); resubmit-lockout bug fixed; **v4.2 extensions** — private table, student "request more time" + adviser-only grant/deny + review-pane override, effective-due recompute |
-| June 13 (eve) | **v4.3 soft edit-lock** — warn-only "someone else is in here" banner in writer + review pane, private edit_locks table, 10-min window. Classroom-reality sprint complete. |
+| June 11 PM | **Worker v4: CMS fully credential-free** — all data ops session-authenticated; reporters server-scoped; articles+assignments RLS sealed; persistent timestamped note threads (XSS-escaped); assignment↔article linkage + progress cards + duplicate prevention; assignment editing; review for all statuses |
+| Classroom-reality sprint | **Worker v4.3** — mandatory 4-step student review chain; per-note done-checkboxes; soft edit-lock warn-only banner (writer + review pane); school-day-aware late policy (HCPS calendar, 10%/day, 3-day lockout on initial submissions, configurable); extensions system (private RLS table, student request → adviser grant/deny, review-pane override, due-date recompute); smart reporter dashboard cards; public carousel fix; magazine homepage (carousel + hero grid + section columns, shared feed engine); blue highlight system w/ publish-time stripping + HL button; trashed articles hidden from reporter dashboard |
 
 ---
 
-*Updated June 13, 2026 — v4.3. Local Shrimp has now attended a Noah Kahan
-concert, so the prophecy of the last footer is fulfilled. The next entry should
-be written by someone who has visited the Lobster Casino (responsibly). 🦞*
+*Updated June 18, 2026 — v4.3, reconstructed from session memory. Items marked
+⚠️ verify need a code check. The next entry should be written by someone who has
+seen Noah Kahan.*
