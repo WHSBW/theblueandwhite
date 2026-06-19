@@ -2,12 +2,14 @@
 **Paul R. Wharton High School Student Newspaper**
 *For Laura Novello (adviser) and future Claude instances picking up this project*
 
-> **Version note (June 18, 2026):** This is the **v4.4** doc. The Worker was
-> updated to v4.4 (password hashing) and that change is documented here straight
-> from the code we wrote and Laura tested live. The v4.3 sections below were
-> verified against the actual Worker + `cms/index.html` on June 18 and remain
-> code-accurate. Laura's corrections are authoritative — fix anything wrong and
-> re-save.
+> **Version note (June 18, 2026):** This is the **v4.5** doc. v4.5 added
+> interview-proof uploads (private Supabase Storage bucket `proofs` + private
+> `proofs` table; four Worker actions; roll-off in the nightly sweep; CMS upload
+> UI, review viewer, and a Reports/CSV column) — all written from the code we
+> shipped and Laura gauntlet-tested live (upload, view via signed URL, delete,
+> reporter own-scoping, Reports↔CSV match). v4.4 (password hashing) and the
+> v4.3 sections below were verified against the actual Worker + `cms/index.html`
+> on June 18 and remain code-accurate. Laura's corrections are authoritative.
 >
 > **How this file stays current:** there are TWO copies — the local one at
 > `OneDrive/GitHub/theblueandwhite/cms/BlueAndWhite-ProjectDocs.md`, and the one
@@ -27,7 +29,8 @@
 | Hosting | GitHub Pages (free, public repo) |
 | Domain registrar | Namecheap (CNAME points to GitHub Pages) |
 | Backend database | Supabase (project ID: `cybjclqcdmrjhoaoiund`) |
-| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.4** |
+| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.5** |
+| File storage | Supabase Storage — private bucket `proofs` (interview proof images; signed-URL access only) |
 | CMS URL | https://blueandwhitewhs.com/cms/ |
 | Late policy config | `assets/js/late-policy-settings.js` (10% / school day) |
 | Deployment | Local OneDrive git clone → GitHub Desktop commit/push; Pages builds in ~1 min, CDN up to ~10 min |
@@ -73,6 +76,8 @@ site-file changes are authenticated and version-controlled in git.
 | assignments table | RLS enabled, no policies — Worker-only |
 | extensions table | RLS enabled, **no anon policies** — Worker-only. Holds student-written reasons + adviser decisions (treated as sensitive personal info) |
 | edit_locks table | RLS enabled, no anon policies — Worker-only. Holds who-opened-what-when |
+| proofs table | RLS enabled, **no anon policies** — Worker-only. Interview-proof file pointers (path + filename + uploader); FK to articles ON DELETE CASCADE |
+| proofs Storage bucket | **PRIVATE** (no public policy). Files reachable only via short-lived (5-min) Worker-signed view URLs; never linked publicly. Protects egress + student privacy |
 | Sessions | 12-hour expiry, purged nightly, killed instantly on staff removal |
 | Reporter isolation | Server-enforced: reporters can only read/write their OWN articles |
 | Note content | HTML-escaped on render (student-editor XSS closed) |
@@ -150,6 +155,14 @@ PK = `article_id`. Columns: `article_id` · `editor_id` · `editor_name` ·
 `opened_at`. Powers the soft "X opened this N min ago" warn-only banner; the
 "actively editing" window is **10 minutes**. **Private — no anon policies.**
 
+### proofs (v4.5, verified against Worker)
+One row per uploaded interview-proof image. Columns: `id` (uuid PK,
+`gen_random_uuid()`) · `article_id` (uuid, **FK → articles(id) ON DELETE
+CASCADE**) · `path` (object path in the `proofs` bucket) · `filename` (original
+name) · `uploaded_by` (name) · `uploaded_at`. Index on `article_id`. **Private —
+RLS on, no anon policies.** The actual image bytes live in the private Storage
+bucket `proofs`; this table only holds pointers. Multiple proofs per article.
+
 ### Cumulative SQL (v4 baseline + v4.3 additions)
 ```sql
 -- v4 baseline (already run)
@@ -188,7 +201,7 @@ ALTER TABLE assignments ENABLE ROW LEVEL SECURITY;
 
 ---
 
-## Cloudflare Worker (v4.4)
+## Cloudflare Worker (v4.5)
 
 Secrets (type Secret): `GITHUB_TOKEN`, `SUPABASE_SERVICE_KEY`.
 Cron: `0 9 * * *` → nightly sweep.
@@ -219,6 +232,10 @@ Don't investigate dead tokens; re-mint.
 | ext_resolve | adviser | grant/deny → sets status, new_due (on grant), note, decided_by/at |
 | lock_touch | any | record opener + time on an article; returns a warn if someone else opened it < 10 min ago |
 | note_toggle | any (reporter own-scoped) | flip done/done_by/done_at on ONE note inside editor_notes JSON; note text untouchable |
+| proof_upload | any (reporter own-scoped) | validates image type + 8 MB cap, base64 → bytes, stores in private `proofs` bucket, records a `proofs` row; cleans up the file if the row insert fails |
+| proof_list | any (reporter sees own) | with an article id: that article's proofs; without an id: editors/adviser get ALL (powers the Reports column), reporters get own |
+| proof_view_url | any (reporter own-scoped) | mints a 5-minute signed view URL for one proof |
+| proof_delete | any (reporter own; editors/adviser any) | deletes the Storage file + the `proofs` row |
 
 **Note-done toggle:** dedicated `note_toggle` action (tagged v4.1 in the Worker).
 It flips `done`/`done_by`/`done_at` on one note inside the editor_notes JSON
@@ -237,8 +254,13 @@ password change. **Worker-only change: no SQL, no RLS, no CMS edit.**
 ### Nightly sweep
 1. Auto-takedowns (published + takedown_at passed → GitHub file removed →
    archived; GitHub failure = retry tomorrow)
-2. Recycle Bin purge (trashed > 30 days → gone)
+2. Recycle Bin purge (trashed > 30 days → gone). **v4.5:** before an article row
+   is deleted, its proof FILES are removed from Storage; the proof ROWS
+   cascade-delete with the article via the FK.
 3. Expired session cleanup
+4. **Proof roll-off (v4.5):** delete proofs whose article `published_at` is more
+   than `PROOF_ROLLOFF_DAYS` (30) ago — "published + 30 days," plus the trash
+   backstop in step 2.
 
 ---
 
@@ -255,6 +277,15 @@ sessionStorage (`bw_session`).
 - **Highlighting:** blue-highlight system with a reporter-facing **HL** button
   for marking text during drafting/review. Highlights are **stripped at publish
   time** so they never reach the live site.
+- **Interview proof uploads (v4.5):** in the WRITER view, an "Interview proof"
+  section — reporters pick an image (instant upload on pick; loud "Uploaded ✓"
+  toast), shown as 120px thumbnails with a delete ×. Images only (≤8 MB),
+  private. In the REVIEW pane, editors/adviser see the same thumbnails under
+  Writing Analytics; clicking opens the full image via a 5-minute signed URL;
+  delete available. Reporters are own-scoped on every proof action (UI gives no
+  path to others' articles AND the Worker re-checks ownership server-side).
+  Functions: `uploadProof`, `loadProofs`, `deleteProof`, `_fileToB64`,
+  `clearProofThumbs`. Proofs save independently of Save Draft / Submit.
 - **Assignments:** adviser/editor creates AND EDITS (✎ Edit fills the form,
   Save Changes / Cancel Edit). **Smart reporter dashboard cards** show per-kid
   progress on each assignment — Write (none yet) / Open + "Draft in progress" /
@@ -280,6 +311,9 @@ sessionStorage (`bw_session`).
   byline with a blank number. **Download CSV** builds the file in-browser (BOM
   for Excel, RFC-4180 quoting) -- no Worker/SQL/RLS touched. Functions:
   `loadReports`, `runReport`, `_renderReportTable`, `downloadReportCSV`.
+  **v4.5:** an **Interview Proof** column (Yes/No) on-screen + in CSV, and a
+  "N with proof" count in the summary line — fed by `proof_list` (no id) so the
+  adviser can grade the interview component straight down the CSV into Canvas.
 - **Review (4-step progress tracker, client-side):** the reporter sees a visual
   4-stage tracker driven by article status — **Rough Draft** (draft) → **Editor
   Review** (pending) → **Revisions** (returned) → **Published** (published) —
@@ -373,7 +407,6 @@ sessionStorage (`bw_session`).
 ## Backlog / Next Sprint Arc
 
 **Next arc (discussed, not yet built):**
-- **Interview proof uploads** — requires Supabase Storage
 - **Rubric grading** — rubric table + review-pane scoring; Claude API called
   from the Worker; adviser confirms before exporting to Canvas. Ties into the
   separate OCR/Fujitsu grading-pipeline project.
@@ -405,8 +438,10 @@ sessionStorage (`bw_session`).
 | Classroom-reality sprint | **Worker v4.3** — mandatory 4-step student review chain; per-note done-checkboxes; soft edit-lock warn-only banner (writer + review pane); school-day-aware late policy (HCPS calendar, 10%/day, 3-day lockout on initial submissions, configurable); extensions system (private RLS table, student request → adviser grant/deny, review-pane override, due-date recompute); smart reporter dashboard cards; public carousel fix; magazine homepage (carousel + hero grid + section columns, shared feed engine); blue highlight system w/ publish-time stripping + HL button; trashed articles hidden from reporter dashboard |
 | June 18 | **Worker v4.4 — password hashing.** Salted PBKDF2-SHA-256 (Web Crypto, 100k iterations); transparent upgrade-on-login for legacy plain-text rows (no migration, no lockouts); `staff_add` + `change_password` hash on write; `password_hash` removed from `staff_update` allowed fields. Verified live: old password rejected, new accepted, stored value confirmed as `pbkdf2$…` hash. Last Security Model item closed. |
 | June 18 | **CMS — Assignment Reports + CSV** (adviser-only, client-side; no Worker/SQL/RLS). Per-assignment, submitters-only report table reusing the late/extension engine; in-browser CSV export (Excel BOM, proper quoting). Full role-gauntlet pass: draft→pending→returned→published tracked correctly, late flag + CSV stayed in sync after a retroactive due-date change, editors correctly see no Reports menu item. |
+| June 18 | **Interview proof uploads (v4.5) — full sprint, spec to ship.** New private `proofs` table (FK→articles, CASCADE) + private Storage bucket `proofs`. Worker: `proof_upload`/`proof_list`/`proof_view_url`/`proof_delete` (reporters own-scoped server-side; images only, 8 MB cap) + roll-off in the nightly sweep ("published + 30 days" + trash backstop). CMS: writer upload control w/ thumbnails + "Uploaded ✓" toast, review-pane viewer (signed-URL open), reporter delete/replace, and an Interview Proof column in Reports + CSV. Gauntlet: upload (incl. wrong-cat-photo → delete → re-upload), adviser + editor view/expand/delete, reporter own-scoping confirmed (UI + server), Reports↔CSV match. Deploy order honored: SQL+bucket → Worker → CMS → verify → bucket confirmed PRIVATE. |
 
 ---
 
-*Updated June 18, 2026 — v4.4, password hashing shipped and verified live.
-The next entry should be written by someone who has seen Noah Kahan.*
+*Updated June 18, 2026 — v4.5, interview-proof uploads shipped and verified live
+(starring Cosmo the cat as QA). The next entry should be written by someone who
+has seen Noah Kahan.*
