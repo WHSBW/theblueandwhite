@@ -2456,29 +2456,158 @@ function _mediaPrecheck(file){
   return ct;
 }
 
-// Draw image to a canvas, desaturate, cap the long edge, return JPEG base64.
-function _imageToBWJpegB64(file, maxDim){
-  return new Promise((res, rej)=>{
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = ()=>{
-      try {
-        let w = img.naturalWidth, h = img.naturalHeight;
-        const cap = maxDim || 800;
-        if (w > cap || h > cap){ const s = cap/Math.max(w,h); w = Math.round(w*s); h = Math.round(h*s); }
-        const c = document.createElement('canvas');
-        c.width = w; c.height = h;
-        const ctx = c.getContext('2d');
-        ctx.filter = 'grayscale(100%)';
-        ctx.drawImage(img, 0, 0, w, h);
-        URL.revokeObjectURL(url);
-        res((c.toDataURL('image/jpeg', 0.9).split(',')[1]) || '');
-      } catch(e){ URL.revokeObjectURL(url); rej(e); }
-    };
-    img.onerror = ()=>{ URL.revokeObjectURL(url); rej(new Error('Could not read that image.')); };
-    img.src = url;
-  });
+// Shared upload step: send a cropped JPEG (base64) to the Worker and reflect
+// the returned URL in the matching field/preview. Used by both photo paths.
+async function _doImageUpload(target, id, dataB64, fieldId, previewId, hintId, toastId, toastMsg){
+  const hint = hintId ? document.getElementById(hintId) : null;
+  if (hint){ hint.textContent = 'Uploading…'; hint.style.color='var(--text-muted)'; hint.style.fontWeight='400'; }
+  try {
+    const r = await workerCall({ action:'image_upload', target: target, id: id,
+      content_type: 'image/jpeg', data_b64: dataB64 });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'Upload failed');
+    const field = document.getElementById(fieldId);
+    if (field) field.value = r.url;
+    if (previewId) _refreshPhotoPreview(fieldId, previewId);
+    if (hint){ hint.textContent = 'Uploaded ✓'; hint.style.color = '#1a7f37'; hint.style.fontWeight='600'; }
+    if (toastId) showToast(toastId, toastMsg, 'success');
+  } catch(e){
+    if (hint) hint.textContent = '';
+    alert('Could not upload: ' + (e.message||e));
+  }
 }
+
+// ══════════════ PHOTO CROPPER (v4.7) ══════════════
+// Drag-and-zoom framing for uploads. The whole image shows with everything
+// outside a fixed-shape frame dimmed; the user pans/zooms (cover-locked so the
+// frame is always full), then we render exactly the framed region to a canvas
+// at a fixed output size (+ grayscale for staff) and hand the base64 to the
+// normal upload path. CMS-only; the Worker just stores what it receives.
+let _crop = null;
+
+function openCropper(opts){
+  const url = URL.createObjectURL(opts.file);
+  const img = new Image();
+  img.onload = function(){
+    const aspect = opts.aspect;
+    let frameW, frameH;
+    if (aspect === 1){ frameW = 360; frameH = 360; }
+    else if (aspect >= 1){ frameW = 480; frameH = Math.round(480/aspect); }
+    else { frameH = 360; frameW = Math.round(360*aspect); }
+    const margin = 44;
+    const stageW = frameW + margin*2, stageH = frameH + margin*2;
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    const sMin = Math.max(frameW/iw, frameH/ih); // cover scale: frame always full
+    _crop = { url:url, img:img, iw:iw, ih:ih, stageW:stageW, stageH:stageH,
+      frameW:frameW, frameH:frameH, sMin:sMin, scale:sMin, panX:0, panY:0,
+      outW:opts.outW, outH:opts.outH, bw:!!opts.bw, onConfirm:opts.onConfirm,
+      dragging:false, lastX:0, lastY:0 };
+
+    document.getElementById('crop-title').textContent = opts.title || 'Position the photo';
+    document.getElementById('crop-frame-label').textContent = opts.frameLabel || '';
+    const cv = document.getElementById('crop-canvas');
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(stageW*dpr); cv.height = Math.round(stageH*dpr);
+    cv.style.width = stageW+'px'; cv.style.height = stageH+'px';
+    cv.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
+    const z = document.getElementById('crop-zoom');
+    z.value = 1;
+    document.getElementById('crop-modal').style.display = 'flex';
+    _cropDraw();
+  };
+  img.onerror = function(){ URL.revokeObjectURL(url); alert('Could not read that image. Try a JPG, PNG, or WEBP.'); };
+  img.src = url;
+}
+
+function _cropClampPan(){
+  const c = _crop;
+  const maxX = Math.max(0, (c.iw*c.scale - c.frameW)/2);
+  const maxY = Math.max(0, (c.ih*c.scale - c.frameH)/2);
+  c.panX = Math.min(maxX, Math.max(-maxX, c.panX));
+  c.panY = Math.min(maxY, Math.max(-maxY, c.panY));
+}
+
+function _cropDraw(){
+  const c = _crop; if (!c) return;
+  const ctx = document.getElementById('crop-canvas').getContext('2d');
+  const cx = c.stageW/2, cy = c.stageH/2;
+  const dispW = c.iw*c.scale, dispH = c.ih*c.scale;
+  const drawX = cx + c.panX - dispW/2, drawY = cy + c.panY - dispH/2;
+  ctx.clearRect(0,0,c.stageW,c.stageH);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(c.img, drawX, drawY, dispW, dispH);
+  const fX = cx - c.frameW/2, fY = cy - c.frameH/2;
+  ctx.fillStyle = 'rgba(13,27,42,0.64)';
+  ctx.fillRect(0,0,c.stageW,fY);
+  ctx.fillRect(0,fY+c.frameH,c.stageW,c.stageH-(fY+c.frameH));
+  ctx.fillRect(0,fY,fX,c.frameH);
+  ctx.fillRect(fX+c.frameW,fY,c.stageW-(fX+c.frameW),c.frameH);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
+  for (let i=1;i<3;i++){
+    const gx = fX + c.frameW*i/3, gy = fY + c.frameH*i/3;
+    ctx.beginPath(); ctx.moveTo(gx,fY); ctx.lineTo(gx,fY+c.frameH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(fX,gy); ctx.lineTo(fX+c.frameW,gy); ctx.stroke();
+  }
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+  ctx.strokeRect(fX+1, fY+1, c.frameW-2, c.frameH-2);
+}
+
+function _cropZoom(val){
+  const c = _crop; if (!c) return;
+  c.scale = c.sMin * parseFloat(val);
+  _cropClampPan(); _cropDraw();
+}
+function _cropPointerDown(e){
+  const c = _crop; if (!c) return;
+  c.dragging = true; c.lastX = e.clientX; c.lastY = e.clientY;
+  try { e.target.setPointerCapture(e.pointerId); } catch(_){}
+}
+function _cropPointerMove(e){
+  const c = _crop; if (!c || !c.dragging) return;
+  c.panX += (e.clientX - c.lastX); c.panY += (e.clientY - c.lastY);
+  c.lastX = e.clientX; c.lastY = e.clientY;
+  _cropClampPan(); _cropDraw();
+}
+function _cropPointerUp(e){
+  const c = _crop; if (!c) return;
+  c.dragging = false;
+  try { e.target.releasePointerCapture(e.pointerId); } catch(_){}
+}
+function _cropWheel(e){
+  const c = _crop; if (!c) return;
+  e.preventDefault();
+  const z = document.getElementById('crop-zoom');
+  let v = parseFloat(z.value) + (e.deltaY < 0 ? 0.12 : -0.12);
+  v = Math.min(4, Math.max(1, v));
+  z.value = v; _cropZoom(v);
+}
+
+function closeCropper(){
+  if (_crop && _crop.url) URL.revokeObjectURL(_crop.url);
+  _crop = null;
+  document.getElementById('crop-modal').style.display = 'none';
+}
+
+function cropConfirm(){
+  const c = _crop; if (!c) return;
+  const cx = c.stageW/2, cy = c.stageH/2;
+  const dispW = c.iw*c.scale, dispH = c.ih*c.scale;
+  const drawX = cx + c.panX - dispW/2, drawY = cy + c.panY - dispH/2;
+  const fX = cx - c.frameW/2, fY = cy - c.frameH/2;
+  const srcX = (fX - drawX)/c.scale, srcY = (fY - drawY)/c.scale;
+  const srcW = c.frameW/c.scale, srcH = c.frameH/c.scale;
+  const out = document.createElement('canvas');
+  out.width = c.outW; out.height = c.outH;
+  const octx = out.getContext('2d');
+  octx.imageSmoothingQuality = 'high';
+  if (c.bw) octx.filter = 'grayscale(100%)';
+  octx.drawImage(c.img, srcX, srcY, srcW, srcH, 0, 0, c.outW, c.outH);
+  const b64 = (out.toDataURL('image/jpeg', 0.9).split(',')[1]) || '';
+  const cb = c.onConfirm;
+  closeCropper();
+  if (cb) cb(b64);
+}
+
+document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && _crop) closeCropper(); });
 
 async function uploadArticlePhoto(input){
   const file = input && input.files && input.files[0];
@@ -2488,47 +2617,27 @@ async function uploadArticlePhoto(input){
     alert('Add a headline and let your draft save first — then you can upload a lead photo.');
     return;
   }
-  const hint = document.getElementById('w-photo-hint');
-  const ct = _mediaPrecheck(file);
-  if (!ct) return;
-  if (hint){ hint.textContent = 'Uploading…'; hint.style.color='var(--text-muted)'; hint.style.fontWeight='400'; }
-  try {
-    const data_b64 = await _fileToB64(file);
-    const r = await workerCall({ action:'image_upload', target:'article', id: currentArticleId,
-      content_type: ct, data_b64: data_b64 });
-    if (!r || !r.ok) throw new Error((r && r.error) || 'Upload failed');
-    document.getElementById('w-photo').value = r.url;
-    _refreshPhotoPreview('w-photo','w-photo-preview');
-    if (hint){ hint.textContent = 'Uploaded ✓'; hint.style.color = '#1a7f37'; hint.style.fontWeight='600'; }
-    showToast('write-toast', 'Lead photo uploaded', 'success');
-  } catch(e){
-    if (hint) hint.textContent = '';
-    alert('Could not upload: ' + (e.message||e));
-  }
+  if (!_mediaPrecheck(file)) return;
+  openCropper({
+    file: file, aspect: 16/9, outW: 1600, outH: 900, bw: false,
+    title: 'Position the lead photo', frameLabel: '16:9',
+    onConfirm: function(b64){ _doImageUpload('article', currentArticleId, b64,
+      'w-photo', 'w-photo-preview', 'w-photo-hint', 'write-toast', 'Lead photo uploaded'); }
+  });
 }
 
 async function uploadStaffPhoto(input, userId){
   const file = input && input.files && input.files[0];
   input.value = '';
   if (!file) return;
-  const hint = document.getElementById('pf-photo-hint-' + userId);
-  const ct = _mediaPrecheck(file);
-  if (!ct) return;
-  if (hint){ hint.textContent = 'Converting to B&W & uploading…'; hint.style.color='var(--text-muted)'; hint.style.fontWeight='400'; }
-  try {
-    const data_b64 = await _imageToBWJpegB64(file, 800);
-    if (!data_b64) throw new Error('Conversion failed');
-    const r = await workerCall({ action:'image_upload', target:'staff', id: userId,
-      content_type: 'image/jpeg', data_b64: data_b64 });
-    if (!r || !r.ok) throw new Error((r && r.error) || 'Upload failed');
-    const field = document.getElementById('pf-photo-' + userId);
-    if (field) field.value = r.url;
-    if (hint){ hint.textContent = 'Uploaded ✓'; hint.style.color = '#1a7f37'; hint.style.fontWeight='600'; }
-    showToast('staff-toast', 'Photo uploaded & converted to B&W. Remember to Publish Staff Page.', 'success');
-  } catch(e){
-    if (hint) hint.textContent = '';
-    alert('Could not upload: ' + (e.message||e));
-  }
+  if (!_mediaPrecheck(file)) return;
+  openCropper({
+    file: file, aspect: 1, outW: 800, outH: 800, bw: true,
+    title: 'Position the headshot', frameLabel: 'square · B&W',
+    onConfirm: function(b64){ _doImageUpload('staff', userId, b64,
+      'pf-photo-'+userId, null, 'pf-photo-hint-'+userId, 'staff-toast',
+      'Photo uploaded & converted to B&W. Remember to Publish Staff Page.'); }
+  });
 }
 
 async function uploadProof(input){
@@ -2682,5 +2791,31 @@ document.getElementById('l-pass').addEventListener('keydown', e => {
   } catch(e) { /* fall through to login screen */ }
 })();
 </script>
+
+<!-- Photo cropper (v4.7) -->
+<div id="crop-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.55);align-items:center;justify-content:center;" onclick="if(event.target===this)closeCropper()">
+  <div style="background:var(--white,#fff);border-radius:8px;box-shadow:0 24px 70px rgba(0,0,0,0.4);padding:20px 22px;max-width:92vw;">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:4px;">
+      <div id="crop-title" style="font-family:'Playfair Display',serif;font-size:18px;font-weight:700;color:var(--navy,#0d1b2a);">Position the photo</div>
+      <div id="crop-frame-label" style="font-size:11px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--text-muted,#9a958a);"></div>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted,#777);margin-bottom:12px;line-height:1.5;max-width:560px;">Drag the photo to reposition it; use the slider (or scroll) to zoom. Only what's inside the bright frame will be saved.</div>
+    <div style="display:flex;justify-content:center;">
+      <canvas id="crop-canvas" style="touch-action:none;cursor:move;border-radius:4px;background:#0d1b2a;"
+        onpointerdown="_cropPointerDown(event)" onpointermove="_cropPointerMove(event)"
+        onpointerup="_cropPointerUp(event)" onpointercancel="_cropPointerUp(event)"
+        onwheel="_cropWheel(event)"></canvas>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin:14px 2px 4px;">
+      <span style="font-size:14px;color:var(--text-muted,#999);">−</span>
+      <input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1" style="flex:1;" oninput="_cropZoom(this.value)">
+      <span style="font-size:16px;color:var(--text-muted,#999);">+</span>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
+      <button class="btn btn-sm" type="button" onclick="closeCropper()">Cancel</button>
+      <button class="btn btn-sm" type="button" style="background:var(--navy,#0d1b2a);color:#fff;border-color:var(--navy,#0d1b2a);" onclick="cropConfirm()">Use this crop</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
