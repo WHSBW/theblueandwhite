@@ -306,8 +306,13 @@
             <input class="form-input" id="w-dek" type="text" placeholder="The dek appears in italic below your headline on the published page">
           </div>
           <div class="form-group">
-            <label class="form-label">Lead photo URL <span style="color:var(--text-muted);font-weight:400;">(optional — hero image on the article page and story cards; paste a hosted image link)</span></label>
+            <label class="form-label">Lead photo URL <span style="color:var(--text-muted);font-weight:400;">(optional — hero image on the article page and story cards; paste a hosted link, or upload your own below)</span></label>
             <input class="form-input" id="w-photo" type="url" placeholder="https://example.com/your-photo.jpg">
+            <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <input type="file" id="w-photo-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadArticlePhoto(this)">
+              <button class="btn btn-sm" type="button" onclick="document.getElementById('w-photo-file').click()">⬆ Upload a photo</button>
+              <span id="w-photo-hint" style="font-size:11px;color:var(--text-muted);"></span>
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label">Article Body <span class="req">*</span></label>
@@ -1836,8 +1841,13 @@ async function loadStaff() {
             <input class="form-input" id="pf-grade-${u.id}" value="${u.grade||''}" placeholder="e.g. 11th Grade"></div>
           <div><label class="form-label">Beats</label>
             <input class="form-input" id="pf-beats-${u.id}" value="${u.beats||''}" placeholder="e.g. Clubs · Student Life"></div>
-          <div><label class="form-label">Photo URL <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-            <input class="form-input" id="pf-photo-${u.id}" value="${u.photo_url||''}" placeholder="https://... (initials shown if blank)"></div>
+          <div><label class="form-label">Photo <span style="font-weight:400;color:var(--text-muted);">(optional — uploads convert to black &amp; white automatically)</span></label>
+            <input class="form-input" id="pf-photo-${u.id}" value="${u.photo_url||''}" placeholder="https://... (initials shown if blank)">
+            <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <input type="file" id="pf-photo-file-${u.id}" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadStaffPhoto(this, '${u.id}')">
+              <button class="btn btn-sm" type="button" onclick="document.getElementById('pf-photo-file-${u.id}').click()">⬆ Upload &amp; convert to B&amp;W</button>
+              <span id="pf-photo-hint-${u.id}" style="font-size:11px;color:var(--text-muted);"></span>
+            </div></div>
           <div><label class="form-label">Staff page section</label>
             <select class="form-input" id="pf-pagesection-${u.id}">
               <option value="">Same as newsroom section</option>
@@ -2395,6 +2405,8 @@ function downloadReportCSV(){
 // ══════════════ INTERVIEW PROOF UPLOADS — CMS UI (v4.5) ══════════════
 const PROOF_MAX_MB = 8;
 const PROOF_OK_TYPES = ['image/png','image/jpeg','image/jpg','image/webp','image/heic','image/heif'];
+const MEDIA_MAX_MB = 8;
+const MEDIA_OK_TYPES = ['image/png','image/jpeg','image/jpg','image/webp'];
 
 function clearProofThumbs(){
   const box = document.getElementById('proof-thumbs');
@@ -2410,6 +2422,94 @@ function _fileToB64(file){
     r.onerror = ()=> rej(new Error('Could not read the file.'));
     r.readAsDataURL(file);
   });
+}
+
+// ── Public photo uploads (v4.6): article lead (colour) + staff (B&W) ──
+function _mediaPrecheck(file){
+  const ct = (file.type||'').toLowerCase();
+  if (MEDIA_OK_TYPES.indexOf(ct) === -1){
+    alert('Please choose a JPG, PNG, or WEBP image. (HEIC photos from an iPhone won’t display on the site — export or save as JPG first.)');
+    return null;
+  }
+  if (file.size > MEDIA_MAX_MB*1024*1024){
+    alert('That image is larger than '+MEDIA_MAX_MB+' MB. Try a smaller copy.');
+    return null;
+  }
+  return ct;
+}
+
+// Draw image to a canvas, desaturate, cap the long edge, return JPEG base64.
+function _imageToBWJpegB64(file, maxDim){
+  return new Promise((res, rej)=>{
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = ()=>{
+      try {
+        let w = img.naturalWidth, h = img.naturalHeight;
+        const cap = maxDim || 800;
+        if (w > cap || h > cap){ const s = cap/Math.max(w,h); w = Math.round(w*s); h = Math.round(h*s); }
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const ctx = c.getContext('2d');
+        ctx.filter = 'grayscale(100%)';
+        ctx.drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        res((c.toDataURL('image/jpeg', 0.9).split(',')[1]) || '');
+      } catch(e){ URL.revokeObjectURL(url); rej(e); }
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); rej(new Error('Could not read that image.')); };
+    img.src = url;
+  });
+}
+
+async function uploadArticlePhoto(input){
+  const file = input && input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  if (!currentArticleId){
+    alert('Add a headline and let your draft save first — then you can upload a lead photo.');
+    return;
+  }
+  const hint = document.getElementById('w-photo-hint');
+  const ct = _mediaPrecheck(file);
+  if (!ct) return;
+  if (hint){ hint.textContent = 'Uploading…'; hint.style.color='var(--text-muted)'; hint.style.fontWeight='400'; }
+  try {
+    const data_b64 = await _fileToB64(file);
+    const r = await workerCall({ action:'image_upload', target:'article', id: currentArticleId,
+      content_type: ct, data_b64: data_b64 });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'Upload failed');
+    document.getElementById('w-photo').value = r.url;
+    if (hint){ hint.textContent = 'Uploaded ✓'; hint.style.color = '#1a7f37'; hint.style.fontWeight='600'; }
+    showToast('write-toast', 'Lead photo uploaded', 'success');
+  } catch(e){
+    if (hint) hint.textContent = '';
+    alert('Could not upload: ' + (e.message||e));
+  }
+}
+
+async function uploadStaffPhoto(input, userId){
+  const file = input && input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  const hint = document.getElementById('pf-photo-hint-' + userId);
+  const ct = _mediaPrecheck(file);
+  if (!ct) return;
+  if (hint){ hint.textContent = 'Converting to B&W & uploading…'; hint.style.color='var(--text-muted)'; hint.style.fontWeight='400'; }
+  try {
+    const data_b64 = await _imageToBWJpegB64(file, 800);
+    if (!data_b64) throw new Error('Conversion failed');
+    const r = await workerCall({ action:'image_upload', target:'staff', id: userId,
+      content_type: 'image/jpeg', data_b64: data_b64 });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'Upload failed');
+    const field = document.getElementById('pf-photo-' + userId);
+    if (field) field.value = r.url;
+    if (hint){ hint.textContent = 'Uploaded ✓'; hint.style.color = '#1a7f37'; hint.style.fontWeight='600'; }
+    showToast('staff-toast', 'Photo uploaded & converted to B&W. Remember to Publish Staff Page.', 'success');
+  } catch(e){
+    if (hint) hint.textContent = '';
+    alert('Could not upload: ' + (e.message||e));
+  }
 }
 
 async function uploadProof(input){
