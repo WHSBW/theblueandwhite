@@ -307,12 +307,14 @@
           </div>
           <div class="form-group">
             <label class="form-label">Lead photo URL <span style="color:var(--text-muted);font-weight:400;">(optional — hero image on the article page and story cards; paste a hosted link, or upload your own below)</span></label>
-            <input class="form-input" id="w-photo" type="url" placeholder="https://example.com/your-photo.jpg">
+            <input class="form-input" id="w-photo" type="url" placeholder="https://example.com/your-photo.jpg" oninput="_refreshPhotoPreview('w-photo','w-photo-preview')">
             <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
               <input type="file" id="w-photo-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadArticlePhoto(this)">
               <button class="btn btn-sm" type="button" onclick="document.getElementById('w-photo-file').click()">⬆ Upload a photo</button>
               <span id="w-photo-hint" style="font-size:11px;color:var(--text-muted);"></span>
             </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:5px;line-height:1.5;">Photos display in a wide <strong>16:9 frame</strong>. Crop tall/vertical photos to landscape <em>before</em> uploading so faces or important details aren't cut off.</div>
+            <img id="w-photo-preview" alt="Lead photo preview" style="display:none;margin-top:10px;max-width:280px;max-height:180px;border-radius:6px;border:1px solid #ddd;object-fit:contain;" onerror="this.style.display='none';">
           </div>
           <div class="form-group">
             <label class="form-label">Article Body <span class="req">*</span></label>
@@ -402,7 +404,8 @@
               </div>
               <div class="form-group">
                 <label class="form-label">Lead Photo URL <span style="color:var(--text-muted);font-weight:400;">(optional)</span></label>
-                <input class="form-input" id="rv-photo" type="url" placeholder="https://example.com/photo.jpg">
+                <input class="form-input" id="rv-photo" type="url" placeholder="https://example.com/photo.jpg" oninput="_refreshPhotoPreview('rv-photo','rv-photo-preview')">
+                <img id="rv-photo-preview" alt="Lead photo preview" style="display:none;margin-top:10px;max-width:360px;max-height:240px;border-radius:6px;border:1px solid #ddd;object-fit:contain;" onerror="this.style.display='none';">
               </div>
               <div class="form-group">
                 <label class="form-label">Auto-takedown <span style="color:var(--text-muted);font-weight:400;">(optional — article comes off the site automatically on this date)</span></label>
@@ -716,7 +719,7 @@ function generateArticleHTML(article) {
         </div>
         <div class="article-date">${pubDate}</div>
       </div>
-      ${article.photo_url ? '<div class="article-hero-img"><img src="' + article.photo_url.replace(/"/g,'%22') + '" alt="" style="width:100%;display:block;border-radius:2px;height:auto;"></div>' + ((article.photo_caption || article.photo_credit) ? '<div class="article-img-caption">' + (article.photo_caption ? (article.photo_caption+'').replace(/</g,'&lt;') : '') + (article.photo_credit ? (article.photo_caption ? ' &middot; ' : '') + 'Photo: ' + (article.photo_credit+'').replace(/</g,'&lt;') : '') + '</div>' : '') : ''}
+      ${article.photo_url ? '<div class="article-hero-img"><img src="' + article.photo_url.replace(/"/g,'%22') + '" alt=""></div>' + ((article.photo_caption || article.photo_credit) ? '<div class="article-img-caption">' + (article.photo_caption ? (article.photo_caption+'').replace(/</g,'&lt;') : '') + (article.photo_credit ? (article.photo_caption ? ' &middot; ' : '') + 'Photo: ' + (article.photo_credit+'').replace(/</g,'&lt;') : '') + '</div>' : '') : ''}
       <div class="article-body">
         ${article.body||''}
       </div>
@@ -1014,6 +1017,7 @@ function initWriteView() {
   document.getElementById('w-caption').value = '';
   document.getElementById('w-credit').value = '';
   document.getElementById('w-photo').value = '';
+  _refreshPhotoPreview('w-photo','w-photo-preview');
   populateAssignmentDropdown('');
   document.getElementById('returned-notes-section').style.display = 'none';
   document.getElementById('w-wc').textContent = '0 words';
@@ -1038,6 +1042,7 @@ async function loadArticleForEdit(id) {
   document.getElementById('w-caption').value = data.photo_caption || '';
   document.getElementById('w-credit').value = data.photo_credit || '';
   document.getElementById('w-photo').value = data.photo_url || '';
+  _refreshPhotoPreview('w-photo','w-photo-preview');
   populateAssignmentDropdown(data.assignment_id || '');
   updateWC('w-body','w-wc');
   writeNotes = parseEditorNotes(data.editor_notes);
@@ -1351,6 +1356,7 @@ async function openReview(id) {
   document.getElementById('rv-hed').value = data.headline || '';
   document.getElementById('rv-dek').value = data.dek || '';
   document.getElementById('rv-photo').value = data.photo_url || '';
+  _refreshPhotoPreview('rv-photo','rv-photo-preview');
   document.getElementById('rv-takedown').value = data.takedown_at ? data.takedown_at.slice(0,10) : '';
   document.getElementById('rv-body').innerHTML = data.body || '';
   reviewNotes = parseEditorNotes(data.editor_notes);
@@ -1847,7 +1853,8 @@ async function loadStaff() {
               <input type="file" id="pf-photo-file-${u.id}" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadStaffPhoto(this, '${u.id}')">
               <button class="btn btn-sm" type="button" onclick="document.getElementById('pf-photo-file-${u.id}').click()">⬆ Upload &amp; convert to B&amp;W</button>
               <span id="pf-photo-hint-${u.id}" style="font-size:11px;color:var(--text-muted);"></span>
-            </div></div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:5px;line-height:1.5;">Headshots display in a <strong>square frame</strong> and convert to black &amp; white automatically. A roughly square or head-and-shoulders photo crops best.</div></div>
           <div><label class="form-label">Staff page section</label>
             <select class="form-input" id="pf-pagesection-${u.id}">
               <option value="">Same as newsroom section</option>
@@ -2425,6 +2432,17 @@ function _fileToB64(file){
 }
 
 // ── Public photo uploads (v4.6): article lead (colour) + staff (B&W) ──
+// Show whatever URL is in a photo field (uploaded OR pasted) as a live preview,
+// so reporters/editors/adviser can eyeball quality before publishing.
+function _refreshPhotoPreview(fieldId, imgId){
+  const f = document.getElementById(fieldId);
+  const img = document.getElementById(imgId);
+  if (!f || !img) return;
+  const u = (f.value||'').trim();
+  if (u){ img.src = u; img.style.display = 'block'; }
+  else { img.removeAttribute('src'); img.style.display = 'none'; }
+}
+
 function _mediaPrecheck(file){
   const ct = (file.type||'').toLowerCase();
   if (MEDIA_OK_TYPES.indexOf(ct) === -1){
@@ -2480,6 +2498,7 @@ async function uploadArticlePhoto(input){
       content_type: ct, data_b64: data_b64 });
     if (!r || !r.ok) throw new Error((r && r.error) || 'Upload failed');
     document.getElementById('w-photo').value = r.url;
+    _refreshPhotoPreview('w-photo','w-photo-preview');
     if (hint){ hint.textContent = 'Uploaded ✓'; hint.style.color = '#1a7f37'; hint.style.fontWeight='600'; }
     showToast('write-toast', 'Lead photo uploaded', 'success');
   } catch(e){
