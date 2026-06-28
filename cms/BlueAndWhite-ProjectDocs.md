@@ -2,7 +2,23 @@
 **Paul R. Wharton High School Student Newspaper**
 *For Laura Novello (adviser) and future Claude instances picking up this project*
 
-> **Version note (June 18, 2026):** This is the **v4.5** doc. v4.5 added
+> **Version note (June 28, 2026):** This is the **v4.6** doc. v4.6 added
+> **public photo uploads with an in-browser cropper.** New PUBLIC Storage bucket
+> `media`; one Worker action `image_upload` (bucket-aware `sbStorageUpload` +
+> `sbPatchRow` stamp `photo_url`); CMS upload buttons beside the existing
+> paste-a-URL fields for BOTH article lead photos (full colour) and staff
+> headshots (auto black-&-white). A drag-and-zoom **cropper** (cover-locked,
+> 16:9 for articles / 1:1 for staff, rule-of-thirds guides, fixed output sizes
+> 1600×900 / 800×800) frames every upload so "what you crop is what shows"
+> everywhere — retiring the manual pre-crop chore. Also: live photo preview in
+> the writer + review panes, and the article hero now centre-crops uniformly
+> with the homepage (removed a stray inline style that defeated `object-fit`).
+> All CMS-only except the bucket — no SQL, no RLS table, no Worker secret change.
+> Gauntlet-passed live (upload, crop framing held on homepage + article, B&W
+> staff, replace-in-place no orphans, cover-lock, cancel/Esc/backdrop). Laura's
+> corrections are authoritative.
+>
+> **Version note (June 18, 2026):** This was the **v4.5** doc. v4.5 added
 > interview-proof uploads (private Supabase Storage bucket `proofs` + private
 > `proofs` table; four Worker actions; roll-off in the nightly sweep; CMS upload
 > UI, review viewer, and a Reports/CSV column) — all written from the code we
@@ -30,7 +46,7 @@
 | Domain registrar | Namecheap (CNAME points to GitHub Pages) |
 | Backend database | Supabase (project ID: `cybjclqcdmrjhoaoiund`) |
 | Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.5** |
-| File storage | Supabase Storage — private bucket `proofs` (interview proof images; signed-URL access only) |
+| File storage | Supabase Storage — private bucket `proofs` (interview proofs; signed-URL only) **and** PUBLIC bucket `media` (article lead photos + staff headshots; public-read, Worker-only writes) |
 | CMS URL | https://blueandwhitewhs.com/cms/ |
 | Late policy config | `assets/js/late-policy-settings.js` (10% / school day) |
 | Deployment | Local OneDrive git clone → GitHub Desktop commit/push; Pages builds in ~1 min, CDN up to ~10 min |
@@ -78,6 +94,7 @@ site-file changes are authenticated and version-controlled in git.
 | edit_locks table | RLS enabled, no anon policies — Worker-only. Holds who-opened-what-when |
 | proofs table | RLS enabled, **no anon policies** — Worker-only. Interview-proof file pointers (path + filename + uploader); FK to articles ON DELETE CASCADE |
 | proofs Storage bucket | **PRIVATE** (no public policy). Files reachable only via short-lived (5-min) Worker-signed view URLs; never linked publicly. Protects egress + student privacy |
+| media Storage bucket (v4.6) | **PUBLIC-read** (anyone can GET) — these images appear on the live site. **No anon writes**: the Worker (service role) is the only writer. Deliberate, documented departure from the proofs privacy model — do NOT lock this bucket or every site photo breaks. Holds article lead photos + staff headshots only; no student-private data |
 | Sessions | 12-hour expiry, purged nightly, killed instantly on staff removal |
 | Reporter isolation | Server-enforced: reporters can only read/write their OWN articles |
 | Note content | HTML-escaped on render (student-editor XSS closed) |
@@ -236,6 +253,7 @@ Don't investigate dead tokens; re-mint.
 | proof_list | any (reporter sees own) | with an article id: that article's proofs; without an id: editors/adviser get ALL (powers the Reports column), reporters get own |
 | proof_view_url | any (reporter own-scoped) | mints a 5-minute signed view URL for one proof |
 | proof_delete | any (reporter own; editors/adviser any) | deletes the Storage file + the `proofs` row |
+| image_upload (v4.6) | any (reporter own article; staff target = adviser only) | stores a pre-cropped JPEG (base64) in the PUBLIC `media` bucket at a stable, extension-less path (`articles/<id>-lead` or `staff/<id>`), then stamps `photo_url` on the row via `sbPatchRow`. Returns the public URL + `?v=` cache-buster. Upsert = replace-in-place, no orphans. Validates JPG/PNG/WEBP + 8 MB cap |
 
 **Note-done toggle:** dedicated `note_toggle` action (tagged v4.1 in the Worker).
 It flips `done`/`done_by`/`done_at` on one note inside the editor_notes JSON
@@ -286,6 +304,31 @@ sessionStorage (`bw_session`).
   path to others' articles AND the Worker re-checks ownership server-side).
   Functions: `uploadProof`, `loadProofs`, `deleteProof`, `_fileToB64`,
   `clearProofThumbs`. Proofs save independently of Save Draft / Submit.
+- **Photo uploads + cropper (v4.6):** beside the existing paste-a-URL field
+  (paste still works — used for already-hosted/wire photos), an **Upload** button
+  on BOTH the writer's lead photo and each staff profile. Picking a file opens a
+  **cropper modal**: the whole image shows with everything outside a fixed-shape
+  bright frame dimmed; drag to reposition, slider/scroll-wheel to zoom,
+  rule-of-thirds guides. **Cover-locked** (the frame is always full — no gaps).
+  Frame is **16:9 for article lead** photos, **1:1 (square) for staff**.
+  "Use this crop" renders exactly the framed region to a canvas at a fixed size
+  (**1600×900** article / **800×800** staff), staff gets **grayscale** folded
+  into the same pass, then the base64 goes to `image_upload`. Because the stored
+  file is already the final shape, it looks identical everywhere (homepage,
+  article, cards) with zero CSS — and it retires the "pre-crop elsewhere" chore.
+  **Stable path per target → replace upserts in place (no orphans).** Reporters
+  own-scoped on article photos (UI + server); staff target is adviser-only.
+  **Live preview** under the photo field in the writer AND review panes (shows
+  uploaded OR pasted URLs, so graininess is visible before publish). Allowed:
+  JPG/PNG/WEBP; **HEIC + AVIF rejected** (won't render publicly / can't decode
+  on Chromebooks). Cancel / Esc / click-backdrop all back out cleanly.
+  Functions: `openCropper`, `cropConfirm`, `closeCropper`, `_cropDraw`,
+  `_cropClampPan`, `_cropZoom`, `_cropPointer*`, `_cropWheel`, `_doImageUpload`,
+  `_refreshPhotoPreview`, `_mediaPrecheck`. **Article hero fix:** removed a stray
+  inline `height:auto` in `generateArticleHTML` that overrode the stylesheet's
+  16:9 `object-fit:cover` — article heroes now centre-crop uniformly with the
+  homepage (existing articles need a re-publish to pick it up; new ones are
+  automatic). All CMS-only — no Worker/SQL/RLS touched beyond the bucket.
 - **Assignments:** adviser/editor creates AND EDITS (✎ Edit fills the form,
   Save Changes / Cancel Edit). **Smart reporter dashboard cards** show per-kid
   progress on each assignment — Write (none yet) / Open + "Draft in progress" /
@@ -412,7 +455,9 @@ sessionStorage (`bw_session`).
   separate OCR/Fujitsu grading-pipeline project.
 
 **Platform polish:**
-- Photo/asset upload to Supabase Storage (replaces paste-a-URL everywhere)
+- ~~Photo/asset upload to Supabase Storage (replaces paste-a-URL everywhere)~~
+  **— DONE v4.6** (article lead + staff headshots, with cropper). Paste-a-URL
+  deliberately retained alongside upload for wire/already-hosted photos.
 - Editor's pick / featured homepage flag
 - More Stories on article pages; live headline ticker; Wharton Brief episodes
 
@@ -439,9 +484,12 @@ sessionStorage (`bw_session`).
 | June 18 | **Worker v4.4 — password hashing.** Salted PBKDF2-SHA-256 (Web Crypto, 100k iterations); transparent upgrade-on-login for legacy plain-text rows (no migration, no lockouts); `staff_add` + `change_password` hash on write; `password_hash` removed from `staff_update` allowed fields. Verified live: old password rejected, new accepted, stored value confirmed as `pbkdf2$…` hash. Last Security Model item closed. |
 | June 18 | **CMS — Assignment Reports + CSV** (adviser-only, client-side; no Worker/SQL/RLS). Per-assignment, submitters-only report table reusing the late/extension engine; in-browser CSV export (Excel BOM, proper quoting). Full role-gauntlet pass: draft→pending→returned→published tracked correctly, late flag + CSV stayed in sync after a retroactive due-date change, editors correctly see no Reports menu item. |
 | June 18 | **Interview proof uploads (v4.5) — full sprint, spec to ship.** New private `proofs` table (FK→articles, CASCADE) + private Storage bucket `proofs`. Worker: `proof_upload`/`proof_list`/`proof_view_url`/`proof_delete` (reporters own-scoped server-side; images only, 8 MB cap) + roll-off in the nightly sweep ("published + 30 days" + trash backstop). CMS: writer upload control w/ thumbnails + "Uploaded ✓" toast, review-pane viewer (signed-URL open), reporter delete/replace, and an Interview Proof column in Reports + CSV. Gauntlet: upload (incl. wrong-cat-photo → delete → re-upload), adviser + editor view/expand/delete, reporter own-scoping confirmed (UI + server), Reports↔CSV match. Deploy order honored: SQL+bucket → Worker → CMS → verify → bucket confirmed PRIVATE. |
+| June 28 | **Public photo uploads + cropper (v4.6) — full sprint, spec to ship.** New PUBLIC Storage bucket `media` (public-read, Worker-only writes — deliberate departure from the proofs privacy model). Worker: one action `image_upload` (reporters own-scoped on article photos, staff = adviser-only; JPG/PNG/WEBP + 8 MB; stores at stable extension-less path, stamps `photo_url`, returns public URL + `?v=`); bucket-aware `sbStorageUpload`; new `sbPatchRow`. CMS: Upload buttons beside paste-a-URL on lead photos (colour) + staff headshots (auto B&W); drag-and-zoom **cropper** (cover-locked, 16:9 / 1:1, thirds guides, output 1600×900 / 800×800, B&W folded into the canvas pass); live photo preview in writer + review panes; student-guidance hints. **Bug fixed:** article hero stray inline `height:auto` removed → heroes now centre-crop uniformly with the homepage. Replace = upsert-in-place, **no orphans** (verified: one file per id). Gauntlet: tall photo cropped/framed → identical on homepage + article; B&W square staff; cover-lock held; cancel/Esc/backdrop; AVIF/HEIC + oversize rejected pre-cropper. CMS-only deploy (+ the one public bucket) — no SQL/RLS/Worker-secret change. |
 
 ---
 
-*Updated June 18, 2026 — v4.5, interview-proof uploads shipped and verified live
-(starring Cosmo the cat as QA). The next entry should be written by someone who
-has seen Noah Kahan.*
+*Updated June 28, 2026 — v4.6, public photo uploads + in-browser cropper shipped
+and verified live (a black cat named, presumably, after some lobster, framed
+ears-in on the homepage). Next up: the rubric-grading API mountain — the first
+feature that sends data off-platform, so spec carefully. The entry after that
+should be written by someone who has finally seen Noah Kahan.*
