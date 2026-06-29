@@ -2597,7 +2597,8 @@ function gradeRenderControls(){
 
 // Fire the AI grade for every checked article.
 async function gradeRunSelected(){
-  const picks = Array.from(document.querySelectorAll('.grade-pick:checked')).map(c=>c.value);
+  const host = document.getElementById('grade-controls');
+  const picks = host ? Array.from(host.querySelectorAll('.grade-pick')).filter(c=>c.checked).map(c=>c.value) : [];
   const statusEl = document.getElementById('grade-run-status');
   if (!picks.length){ if (statusEl) statusEl.textContent = 'Nothing selected.'; return; }
   const btn = document.getElementById('grade-run-btn');
@@ -2625,7 +2626,8 @@ async function gradeRunSelected(){
         working[c.key] = { tier: g.tier || 'developing', justification: g.justification || '' };
       });
       working.overall = r.grade.overall || '';
-      _gradeDrafts[r.id] = { type: r.type, ai: r.grade, working: working, confirmed: false, releaseMode: 'full' };
+      const prevMode = (_gradeDrafts[r.id] && _gradeDrafts[r.id].releaseMode) || 'full';
+      _gradeDrafts[r.id] = { type: r.type, ai: r.grade, working: working, confirmed: false, releaseMode: prevMode };
       newBatch.push(r.id);
     } else {
       failed.push((_gradeArticles[r.id] ? _gradeArticles[r.id].name : r.id) + ' — ' + (r.error||'failed'));
@@ -2639,6 +2641,8 @@ async function gradeRunSelected(){
   if (failed.length) msg += ' (' + failed.map(escHtml).join('; ') + ')';
   if (statusEl) statusEl.textContent = msg + '.';
   gradeRenderControls();
+  const hostC = document.getElementById('grade-controls');
+  if (hostC) hostC.querySelectorAll('.grade-pick').forEach(c=>{ c.checked = false; });
   if (newBatch.length) gradeOpenOverlay(0);
 }
 
@@ -2671,6 +2675,7 @@ async function gradeRenderOverlay(){
   let art = null;
   try { const r = await workerCall({ action:'art_read', where:{ id:id }, single:true }); art = r.row; }
   catch(e){ art = null; }
+  if (_gradeBatch[_gradeIdx] !== id) return;   // stale-render guard: user moved during await
   if (art){
     left.innerHTML =
       '<div style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#888;">'+escHtml(art.section||'')+' · graded as '+escHtml(draft.type)+'</div>'+
