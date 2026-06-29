@@ -556,6 +556,14 @@
             </select>
           </div>
           <div id="reports-body"></div>
+          <div id="grade-controls"></div>
+          <!-- AI grading side-by-side overlay (v4.8) -->
+          <div id="grade-overlay" style="display:none;position:fixed;inset:0;background:rgba(20,25,40,.55);z-index:9000;align-items:stretch;justify-content:center;padding:24px;">
+            <div style="background:#fff;border-radius:10px;max-width:1280px;width:100%;display:grid;grid-template-columns:1fr 1fr;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+              <div id="grade-left" style="overflow-y:auto;padding:26px 28px;border-right:1px solid #eee;background:#fafafa;"></div>
+              <div id="grade-right" style="overflow-y:auto;padding:20px 24px;"></div>
+            </div>
+          </div>
         </div>
 
         <!-- PASSWORD CHANGE (all roles) -->
@@ -2304,6 +2312,7 @@ async function runReport() {
     const ext = extMap[a.id];
     const info = lateInfoFor(a, dueISO, ext);
     return {
+      id: a.id,
       name: a.author_name || '(unknown)',
       studentNo: a.author_id ? (numById[String(a.author_id)] || '') : '',
       status: a.status || '',
@@ -2319,6 +2328,7 @@ async function runReport() {
   });
 
   _reportRows = rows;
+  try { gradeSyncFromReport(matched); } catch(e){}
   _reportMeta = { title: assignment ? (assignment.title||'Assignment') : 'Assignment', due: dueISO };
   _renderReportTable(rows, _reportMeta, minWords);
 }
@@ -2354,7 +2364,7 @@ function _renderReportTable(rows, meta, minWords){
   html += '<div class="section-div">'+escHtml(meta.title)+(meta.due?' · due '+formatDate(meta.due):'')+'</div>';
   html += '<div style="color:#777;font-size:13px;margin:-6px 0 14px;">'+
     rows.length+' reporter'+(rows.length>1?'s':'')+' · '+submittedCount+' submitted · '+lateCount+' late · '+pubCount+' published · '+proofCount+' with proof</div>';
-  html += '<button class="btn" onclick="downloadReportCSV()" style="margin-bottom:14px;">⤓ Download CSV</button>';
+  html += '<button class="btn" onclick="downloadReportCSVWithGrades()" style="margin-bottom:14px;">⤓ Download CSV</button>';
   html += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:14px;">';
   html += '<thead><tr>'+
     ['Reporter','Student #','Status','Words','Submitted','Late','Extension','Published','Interview Proof']
@@ -2386,14 +2396,49 @@ function _csvCell(v){
   v = (v===null||v===undefined) ? '' : String(v);
   return /[",\n\r]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v;
 }
-function downloadReportCSV(){
+// Build a latest-version-per-article grade map from grade_list (adviser only).
+async function _loadGradeMap(){
+  if (_gradeListCache) return _gradeListCache;
+  let rows = [];
+  try { const r = await workerCall({ action:'grade_list' }); rows = r.rows || []; }
+  catch(e){ rows = []; }
+  const byArticle = {};
+  rows.forEach(g=>{
+    const k = String(g.article_id);
+    if (!byArticle[k] || (g.version||0) > (byArticle[k].version||0)) byArticle[k] = g;
+  });
+  _gradeListCache = byArticle;
+  return byArticle;
+}
+// CSV button entry point: pull grades, then build the file.
+async function downloadReportCSVWithGrades(){
   if (!_reportRows || !_reportRows.length){ alert('Run a report first.'); return; }
-  const header = ['Reporter','Student Number','Status','Word Count','Min Words','Submitted','Late','Extension','Published','Interview Proof'];
+  const gmap = await _loadGradeMap();
+  downloadReportCSV(gmap);
+}
+function _critPts(grade, key){
+  // confirmed_grade holds tiers only; derive points from the shared table.
+  if (!grade || !grade.confirmed_grade || !grade.confirmed_grade[key]) return '';
+  const tier = grade.confirmed_grade[key].tier;
+  const pts = GRADE_POINTS[key] ? GRADE_POINTS[key][tier] : undefined;
+  return (pts===undefined) ? '' : pts;
+}
+function downloadReportCSV(gmap){
+  if (!_reportRows || !_reportRows.length){ alert('Run a report first.'); return; }
+  gmap = gmap || {};
+  const header = ['Reporter','Student Number','Status','Word Count','Min Words','Submitted','Late','Extension','Published','Interview Proof','AI Total','Confirmed Total','Confirmed?','Lead','Structure','Angle','Clarity','Interview','Mechanics'];
   const lines = [ header.map(_csvCell).join(',') ];
   _reportRows.forEach(r=>{
+    const g = gmap[String(r.id)];
+    const aiTotal = g ? (g.ai_total!==undefined && g.ai_total!==null ? g.ai_total : '') : '';
+    const confTotal = g ? (g.confirmed_total!==undefined && g.confirmed_total!==null ? g.confirmed_total : '') : '';
+    const confirmed = g ? 'Yes' : 'No';
     lines.push([
       r.name, r.studentNo, r.status, r.words, r.minWords,
-      r.submitted ? formatDate(r.submitted) : '', r.late, r.extension, r.published, r.proof
+      r.submitted ? formatDate(r.submitted) : '', r.late, r.extension, r.published, r.proof,
+      aiTotal, confTotal, confirmed,
+      _critPts(g,'lead'), _critPts(g,'structure'), _critPts(g,'angle'),
+      _critPts(g,'clarity'), _critPts(g,'interview'), _critPts(g,'mechanics')
     ].map(_csvCell).join(','));
   });
   const csv = lines.join('\r\n');
@@ -2408,6 +2453,270 @@ function downloadReportCSV(){
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 
+
+
+// ══════════════ AI RUBRIC GRADING — CMS UI (v4.8) ══════════════
+// Adviser-only. Lives inside the Reports view. Flow:
+//   pick assignment → table (with checkboxes on gradable rows) → "Grade selected"
+//   → rubric_grade batch → "Review grades" → side-by-side overlay (article left,
+//   editable scorecard right) → Confirm & save (grade_save) → auto-advance.
+// Nothing is a grade until Confirm & save. The Worker recomputes the confirmed
+// total from the tiers at save; the on-screen total is just live UX.
+
+const GRADE_CRIT = [
+  { key:'lead',      label:'Lead',                       max:15 },
+  { key:'structure', label:'Structure / Inverted Pyramid', max:20 },
+  { key:'angle',     label:'Angle & News Value',         max:15 },
+  { key:'clarity',   label:'Clarity & Accessibility',    max:15 },
+  { key:'interview', label:'Interview / Source Integration', max:20 },
+  { key:'mechanics', label:'Mechanics & Style',          max:15 },
+];
+const GRADE_TIERS = ['exemplary','proficient','developing','beginning','absent'];
+const GRADE_TIER_LABEL = {
+  exemplary:'Exemplary', proficient:'Proficient', developing:'Developing',
+  beginning:'Beginning', absent:'Not present'
+};
+// Mirror of the Worker's RUBRIC_POINTS (for live on-screen totals only; the
+// Worker is the source of truth at save).
+const GRADE_POINTS = {
+  lead:      { exemplary:15, proficient:11, developing:7.5, beginning:3.5, absent:0 },
+  structure: { exemplary:20, proficient:15, developing:10,  beginning:5,   absent:0 },
+  angle:     { exemplary:15, proficient:11, developing:7.5, beginning:3.5, absent:0 },
+  clarity:   { exemplary:15, proficient:11, developing:7.5, beginning:3.5, absent:0 },
+  interview: { exemplary:20, proficient:15, developing:10,  beginning:5,   absent:0 },
+  mechanics: { exemplary:15, proficient:11, developing:7.5, beginning:3.5, absent:0 },
+};
+const GRADABLE_STATUSES = ['pending','returned','published']; // never raw drafts/trashed
+
+// Per-report grading state.
+let _gradeArticles = {};   // id -> {name, status, section, type}
+let _gradeBatch = [];      // ordered list of ids in the current review batch
+let _gradeDrafts = {};     // id -> { type, ai:{...}, working:{lead:{tier,justification},...,overall}, confirmed:bool }
+let _gradeIdx = 0;         // current index into _gradeBatch
+let _gradeListCache = null; // latest-version-per-article map for CSV (from grade_list)
+
+// Called by runReport after it stores _reportRows: stash gradable article meta
+// and (re)render the grading controls + checkboxes.
+function gradeSyncFromReport(matchedArticles){
+  _gradeArticles = {};
+  (matchedArticles||[]).forEach(a=>{
+    if (GRADABLE_STATUSES.includes(a.status)){
+      _gradeArticles[String(a.id)] = {
+        name: a.author_name || '(unknown)',
+        status: a.status,
+        section: a.section || 'News',
+        type: (String(a.section||'').toLowerCase()==='editorial') ? 'editorial' : 'news',
+      };
+    }
+  });
+  gradeRenderControls();
+}
+
+// Build the checkbox panel + buttons, injected just under the report table.
+function gradeRenderControls(){
+  const host = document.getElementById('grade-controls');
+  if (!host) return;
+  const ids = Object.keys(_gradeArticles);
+  if (!ids.length){ host.innerHTML = ''; return; }
+
+  let h = '<div class="section-div" style="margin-top:26px;">AI Rubric Grading <span style="font-weight:400;color:#888;font-size:13px;">· second opinion — you confirm every score</span></div>';
+  h += '<div style="font-size:13px;color:#777;margin:-6px 0 12px;">Tick the articles ready to grade, then run the AI. Drafts and trashed work are not gradable.</div>';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-bottom:14px;">';
+  ids.sort((a,b)=> _gradeArticles[a].name.localeCompare(_gradeArticles[b].name));
+  ids.forEach(id=>{
+    const a = _gradeArticles[id];
+    const done = _gradeDrafts[id] && _gradeDrafts[id].confirmed;
+    h += '<label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer;">'+
+      '<input type="checkbox" class="grade-pick" value="'+_attr(id)+'">'+
+      escHtml(a.name)+' <span style="color:#aaa;">('+escHtml(a.status)+')</span>'+
+      (done ? ' <span style="color:#1a7f37;font-weight:600;">✓ graded</span>' : '')+
+      '</label>';
+  });
+  h += '</div>';
+  h += '<button class="btn btn-primary" onclick="gradeRunSelected()" id="grade-run-btn">⚖ Grade selected</button>';
+  if (_gradeBatch.length){
+    h += '<button class="btn" onclick="gradeOpenOverlay(0)" style="margin-left:8px;">📝 Review grades ('+_gradeBatch.length+')</button>';
+  }
+  h += '<div id="grade-run-status" style="font-size:13px;color:#777;margin-top:10px;"></div>';
+  host.innerHTML = h;
+}
+
+// Fire the AI grade for every checked article.
+async function gradeRunSelected(){
+  const picks = Array.from(document.querySelectorAll('.grade-pick:checked')).map(c=>c.value);
+  const statusEl = document.getElementById('grade-run-status');
+  if (!picks.length){ if (statusEl) statusEl.textContent = 'Nothing selected.'; return; }
+  const btn = document.getElementById('grade-run-btn');
+  if (btn){ btn.disabled = true; btn.textContent = 'Grading… (this calls the AI, ~2s each)'; }
+  if (statusEl) statusEl.textContent = 'Sending '+picks.length+' article'+(picks.length>1?'s':'')+' to the grader…';
+
+  let res;
+  try { res = await workerCall({ action:'rubric_grade', ids: picks }); }
+  catch(e){ res = { error: e.message }; }
+
+  if (btn){ btn.disabled = false; btn.textContent = '⚖ Grade selected'; }
+  if (!res || res.error){
+    if (statusEl) statusEl.textContent = 'Grading failed: ' + escHtml((res&&res.error)||'unknown error');
+    return;
+  }
+
+  // Seed working drafts from the AI results; collect successes into the batch.
+  const newBatch = [];
+  const failed = [];
+  (res.results||[]).forEach(r=>{
+    if (r.ok && r.grade){
+      const working = {};
+      GRADE_CRIT.forEach(c=>{
+        const g = r.grade.criteria[c.key] || {};
+        working[c.key] = { tier: g.tier || 'developing', justification: g.justification || '' };
+      });
+      working.overall = r.grade.overall || '';
+      _gradeDrafts[r.id] = { type: r.type, ai: r.grade, working: working, confirmed: false };
+      newBatch.push(r.id);
+    } else {
+      failed.push((_gradeArticles[r.id] ? _gradeArticles[r.id].name : r.id) + ' — ' + (r.error||'failed'));
+    }
+  });
+  _gradeBatch = newBatch;
+  _gradeIdx = 0;
+
+  let msg = res.graded + ' graded';
+  if (res.failed) msg += ', ' + res.failed + ' need a retry';
+  if (failed.length) msg += ' (' + failed.map(escHtml).join('; ') + ')';
+  if (statusEl) statusEl.textContent = msg + '.';
+  gradeRenderControls();
+  if (newBatch.length) gradeOpenOverlay(0);
+}
+
+// ── The side-by-side overlay ──
+function gradeOpenOverlay(idx){
+  if (!_gradeBatch.length) return;
+  _gradeIdx = Math.max(0, Math.min(idx, _gradeBatch.length-1));
+  document.getElementById('grade-overlay').style.display = 'flex';
+  gradeRenderOverlay();
+}
+function gradeCloseOverlay(){
+  document.getElementById('grade-overlay').style.display = 'none';
+  gradeRenderControls(); // refresh ✓ marks
+}
+function gradeLiveTotal(working){
+  let t = 0;
+  GRADE_CRIT.forEach(c=>{ t += (GRADE_POINTS[c.key][working[c.key].tier] || 0); });
+  return Math.round(t*2)/2;
+}
+async function gradeRenderOverlay(){
+  const id = _gradeBatch[_gradeIdx];
+  const meta = _gradeArticles[id] || {};
+  const draft = _gradeDrafts[id];
+  const left = document.getElementById('grade-left');
+  const right = document.getElementById('grade-right');
+  if (!draft){ return; }
+
+  // LEFT: fetch + render the article (read-only).
+  left.innerHTML = '<div class="loading">Loading article…</div>';
+  let art = null;
+  try { const r = await workerCall({ action:'art_read', where:{ id:id }, single:true }); art = r.row; }
+  catch(e){ art = null; }
+  if (art){
+    left.innerHTML =
+      '<div style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#888;">'+escHtml(art.section||'')+' · graded as '+escHtml(draft.type)+'</div>'+
+      '<h2 style="font-family:\'Playfair Display\',serif;margin:6px 0 4px;">'+escHtml(art.headline||'Untitled')+'</h2>'+
+      (art.dek?'<p style="color:#555;font-style:italic;margin:0 0 10px;">'+escHtml(art.dek)+'</p>':'')+
+      '<div style="font-size:13px;color:#777;margin-bottom:14px;">By '+escHtml(art.author_name||'')+' · '+(art.word_count||0)+' words</div>'+
+      '<div class="grade-article-body" style="line-height:1.7;">'+(art.body||'<em>No body.</em>')+'</div>';
+  } else {
+    left.innerHTML = '<div style="color:#b00;">Could not load the article text.</div>';
+  }
+
+  // RIGHT: editable scorecard.
+  const w = draft.working;
+  let h = '';
+  h += '<div style="display:flex;justify-content:space-between;align-items:baseline;">'+
+       '<div style="font-size:13px;color:#777;">Article '+(_gradeIdx+1)+' of '+_gradeBatch.length+' · '+escHtml(meta.name||'')+'</div>'+
+       '<button class="btn btn-sm" onclick="gradeCloseOverlay()">✕ Close</button></div>';
+  if (draft.ai && draft.ai.injection_flag){
+    h += '<div style="background:#fff4e5;border:1px solid #f0c98b;border-radius:6px;padding:10px 12px;margin:10px 0;font-size:13px;color:#7a4a00;">'+
+         '⚑ This article contains text aimed at the grader. The score below reflects the real writing only — take a look and decide.</div>';
+  }
+  h += '<div style="font-size:12px;color:#888;margin:8px 0 14px;">The AI draft is a starting point. Edit any tier or note; the total updates live. Nothing is saved until you Confirm.</div>';
+
+  GRADE_CRIT.forEach(c=>{
+    const cur = w[c.key];
+    const aiTier = draft.ai && draft.ai.criteria[c.key] ? draft.ai.criteria[c.key].tier : null;
+    h += '<div style="border-bottom:1px solid #eee;padding:12px 0;">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">'+
+         '<strong style="font-size:14px;">'+escHtml(c.label)+' <span style="color:#aaa;font-weight:400;">/ '+c.max+'</span></strong>'+
+         '<select class="form-input" style="width:auto;padding:4px 8px;font-size:13px;" onchange="gradeSetTier(\''+c.key+'\', this.value)">'+
+         GRADE_TIERS.map(t=>'<option value="'+t+'"'+(t===cur.tier?' selected':'')+'>'+GRADE_TIER_LABEL[t]+' ('+GRADE_POINTS[c.key][t]+')</option>').join('')+
+         '</select></div>';
+    if (aiTier && aiTier !== cur.tier){
+      h += '<div style="font-size:11px;color:#b4690e;margin-top:3px;">AI suggested: '+GRADE_TIER_LABEL[aiTier]+' — you changed it</div>';
+    }
+    h += '<textarea class="form-input" style="margin-top:8px;font-size:13px;min-height:54px;" '+
+         'oninput="gradeSetJust(\''+c.key+'\', this.value)" placeholder="Justification…">'+escHtml(cur.justification)+'</textarea>';
+    h += '</div>';
+  });
+
+  h += '<div style="padding:12px 0;"><strong style="font-size:14px;">Overall comment</strong>'+
+       '<textarea class="form-input" style="margin-top:8px;font-size:13px;min-height:54px;" '+
+       'oninput="gradeSetOverall(this.value)" placeholder="A sentence or two for your records…">'+escHtml(w.overall||'')+'</textarea></div>';
+
+  h += '<div style="position:sticky;bottom:0;background:#fff;border-top:2px solid #e2e2e2;padding:14px 0;display:flex;justify-content:space-between;align-items:center;gap:10px;">';
+  h += '<div style="font-size:20px;font-weight:700;">Total: <span id="grade-live-total">'+gradeLiveTotal(w)+'</span> / 100'+
+       (draft.confirmed ? ' <span style="color:#1a7f37;font-size:13px;font-weight:600;">✓ saved</span>' : '')+'</div>';
+  h += '<div>';
+  if (_gradeIdx>0) h += '<button class="btn btn-sm" onclick="gradeOpenOverlay('+(_gradeIdx-1)+')">‹ Prev</button> ';
+  if (_gradeIdx<_gradeBatch.length-1) h += '<button class="btn btn-sm" onclick="gradeOpenOverlay('+(_gradeIdx+1)+')">Next ›</button> ';
+  h += '<button class="btn btn-primary" onclick="gradeConfirmSave()" id="grade-save-btn" style="margin-left:6px;">Confirm &amp; save</button>';
+  h += '</div></div>';
+
+  right.innerHTML = h;
+}
+function gradeSetTier(key, val){
+  const id = _gradeBatch[_gradeIdx];
+  _gradeDrafts[id].working[key].tier = val;
+  const el = document.getElementById('grade-live-total');
+  if (el) el.textContent = gradeLiveTotal(_gradeDrafts[id].working);
+  // re-render so the "you changed it" hint updates (cheap)
+  gradeRenderOverlay();
+}
+function gradeSetJust(key, val){ _gradeDrafts[_gradeBatch[_gradeIdx]].working[key].justification = val; }
+function gradeSetOverall(val){ _gradeDrafts[_gradeBatch[_gradeIdx]].working.overall = val; }
+
+async function gradeConfirmSave(){
+  const id = _gradeBatch[_gradeIdx];
+  const draft = _gradeDrafts[id];
+  const btn = document.getElementById('grade-save-btn');
+  if (btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  let res;
+  try {
+    res = await workerCall({
+      action:'grade_save',
+      article_id: id,
+      article_type: draft.type,
+      ai_draft: draft.ai,                  // full AI draft for the audit trail
+      confirmed: draft.working,            // your edited tiers + justifications + overall
+    });
+  } catch(e){ res = { error: e.message }; }
+  if (btn){ btn.disabled = false; btn.textContent = 'Confirm & save'; }
+  if (!res || res.error){
+    alert('Could not save: ' + ((res&&res.error)||'unknown error'));
+    return;
+  }
+  draft.confirmed = true;
+  _gradeListCache = null; // CSV must re-pull
+  // Auto-advance to the next unconfirmed article in the batch.
+  let next = -1;
+  for (let i=_gradeIdx+1; i<_gradeBatch.length; i++){ if (!_gradeDrafts[_gradeBatch[i]].confirmed){ next=i; break; } }
+  if (next === -1){ for (let i=0;i<_gradeBatch.length;i++){ if (!_gradeDrafts[_gradeBatch[i]].confirmed){ next=i; break; } } }
+  if (next === -1){
+    gradeCloseOverlay();
+    const statusEl = document.getElementById('grade-run-status');
+    if (statusEl) statusEl.textContent = 'All grades in this batch confirmed and saved. ✓';
+  } else {
+    gradeOpenOverlay(next);
+  }
+}
 
 // ══════════════ INTERVIEW PROOF UPLOADS — CMS UI (v4.5) ══════════════
 const PROOF_MAX_MB = 8;
