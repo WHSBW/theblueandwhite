@@ -2,7 +2,25 @@
 **Paul R. Wharton High School Student Newspaper**
 *For Laura Novello (adviser) and future Claude instances picking up this project*
 
-> **Version note (June 28, 2026):** This is the **v4.6** doc. v4.6 added
+> **Version note (June 29, 2026):** This is the **v4.7** doc. v4.7 added the
+> **rubric-grading ENGINE** — one Worker action `rubric_grade` (editor/adviser
+> only) that calls Claude for an **AI second-opinion draft** the adviser
+> confirms; it is **never autonomous.** The model picks one of five tiers per
+> criterion plus a short justification; the **Worker maps tier → points from a
+> hardcoded table and does ALL arithmetic** (zero hallucinated scores). Privacy:
+> only article type + anonymous article text leave the Worker — no name, no
+> student number. Prompt caching on (cache_control on the rubric). Bounded retry
+> (2 attempts, then flag — no infinite loop). Injection handling is **flag only,
+> never auto-penalty:** the model returns an `injection_flag` and grades the
+> real text on its merits regardless. **This is the first feature that sends data
+> off-platform.** Needs a new Worker secret `ANTHROPIC_KEY`. **Worker-code +
+> secret only — no SQL, no RLS, no CMS change.** Verified live via console
+> (no UI yet) across the full injection matrix — see Build History. **Still
+> ahead:** the scorecard UI (the confirm-before-it-counts screen that retires
+> console testing), then storage + CSV for Canvas. Laura's corrections are
+> authoritative.
+>
+> **Version note (June 28, 2026):** This was the **v4.6** doc. v4.6 added
 > **public photo uploads with an in-browser cropper.** New PUBLIC Storage bucket
 > `media`; one Worker action `image_upload` (bucket-aware `sbStorageUpload` +
 > `sbPatchRow` stamp `photo_url`); CMS upload buttons beside the existing
@@ -45,8 +63,9 @@
 | Hosting | GitHub Pages (free, public repo) |
 | Domain registrar | Namecheap (CNAME points to GitHub Pages) |
 | Backend database | Supabase (project ID: `cybjclqcdmrjhoaoiund`) |
-| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.5** |
+| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.7** |
 | File storage | Supabase Storage — private bucket `proofs` (interview proofs; signed-URL only) **and** PUBLIC bucket `media` (article lead photos + staff headshots; public-read, Worker-only writes) |
+| AI grading | Anthropic API (`claude-sonnet-4-6`), called from the Worker via the `ANTHROPIC_KEY` secret. Second opinion only; adviser confirms. |
 | CMS URL | https://blueandwhitewhs.com/cms/ |
 | Late policy config | `assets/js/late-policy-settings.js` (10% / school day) |
 | Deployment | Local OneDrive git clone → GitHub Desktop commit/push; Pages builds in ~1 min, CDN up to ~10 min |
@@ -62,10 +81,11 @@ Reporter/Editor (browser)
         │  login → Worker checks credentials, issues 12-hour session token
         │  EVERY data operation: POST {action, token, ...}
         ▼
-Cloudflare Worker  ◄── secrets: GITHUB_TOKEN, SUPABASE_SERVICE_KEY
+Cloudflare Worker  ◄── secrets: GITHUB_TOKEN, SUPABASE_SERVICE_KEY, ANTHROPIC_KEY
    │         │      ◄── Cron Trigger 0 9 * * * (nightly sweep, 4–5 AM Tampa)
    │         └── Supabase REST (service role) — ALL reads & writes for the CMS
    │  PUT/DELETE files via GitHub Contents API
+   │  POST api.anthropic.com — rubric grading draft (v4.7, adviser-triggered)
    ▼
 GitHub repo → GitHub Pages → blueandwhitewhs.com
         ▲
@@ -79,13 +99,20 @@ verified session token. The public key can read published articles and nothing
 else — no drafts, no notes, no extensions, no edit-locks, no writes. All
 site-file changes are authenticated and version-controlled in git.
 
+**On the AI grader (v4.7):** the only data that leaves the platform is the
+rubric + an article's **anonymous** plain text + its type ("news"/"editorial").
+No student name, no student number, no metadata — the Worker re-attaches
+identity locally for the gradebook. The API key lives only as a Worker secret,
+never in the browser. Grading is **manual and adviser-triggered**, never
+automatic.
+
 ---
 
 ## Security Model (v4.3)
 
 | Surface | State |
 |---|---|
-| GitHub token, Supabase service key | Encrypted Worker secrets only |
+| GitHub token, Supabase service key, Anthropic key | Encrypted Worker secrets only |
 | Site files (GitHub Pages) | Change requires valid editor/adviser session |
 | users + sessions tables | RLS enabled, no policies — Worker-only access |
 | articles table | RLS enabled; anon policy = SELECT where status='published' ONLY; no anon writes |
@@ -95,6 +122,7 @@ site-file changes are authenticated and version-controlled in git.
 | proofs table | RLS enabled, **no anon policies** — Worker-only. Interview-proof file pointers (path + filename + uploader); FK to articles ON DELETE CASCADE |
 | proofs Storage bucket | **PRIVATE** (no public policy). Files reachable only via short-lived (5-min) Worker-signed view URLs; never linked publicly. Protects egress + student privacy |
 | media Storage bucket (v4.6) | **PUBLIC-read** (anyone can GET) — these images appear on the live site. **No anon writes**: the Worker (service role) is the only writer. Deliberate, documented departure from the proofs privacy model — do NOT lock this bucket or every site photo breaks. Holds article lead photos + staff headshots only; no student-private data |
+| AI grading payload (v4.7) | Only rubric + **anonymous** article text + type leave the Worker. No name/number/metadata. Adviser-triggered only; nothing saved by the action |
 | Sessions | 12-hour expiry, purged nightly, killed instantly on staff removal |
 | Reporter isolation | Server-enforced: reporters can only read/write their OWN articles |
 | Note content | HTML-escaped on render (student-editor XSS closed) |
@@ -125,9 +153,11 @@ until they do. New accounts (`staff_add`) and password changes
 - **Reporter:** own articles only (write/edit/autosave/submit), see applicable
   assignments + own progress, request extensions, change own password.
 - **Editor:** + read everything, review queue, publish/return/archive/recycle/
-  restore/delete-forever, analytics, create/edit/delete assignments.
+  restore/delete-forever, analytics, create/edit/delete assignments, **run AI
+  rubric grading** (`rubric_grade`).
 - **Adviser:** + Staff Manager, staff page publishing, add/remove logins;
-  grant/deny extensions; unremovable via API.
+  grant/deny extensions; unremovable via API. **Confirms every AI grade before
+  it counts (the only path to a stored score — UI pending).**
 
 ---
 
@@ -180,6 +210,12 @@ name) · `uploaded_by` (name) · `uploaded_at`. Index on `article_id`. **Private
 RLS on, no anon policies.** The actual image bytes live in the private Storage
 bucket `proofs`; this table only holds pointers. Multiple proofs per article.
 
+### (no new tables in v4.7)
+`rubric_grade` **saves nothing** — it only returns a draft scorecard to the
+browser. Grade storage arrives with the scorecard UI sprint (planned: store
+both the AI draft and the adviser-confirmed score, with a 30-day roll-off, in
+the CSV/report layer — same pattern as proofs roll-off).
+
 ### Cumulative SQL (v4 baseline + v4.3 additions)
 ```sql
 -- v4 baseline (already run)
@@ -213,14 +249,18 @@ ALTER TABLE assignments ENABLE ROW LEVEL SECURITY;
 -- editor_notes 'done'/'done_by'/'done_at' live INSIDE the existing JSON array,
 --   so note checkboxes needed no schema change.
 
+-- v4.7 (rubric grading): NO SQL. The action saves nothing; it only returns a
+--   draft scorecard to the browser. Storage (AI draft + confirmed score) comes
+--   with the scorecard UI sprint.
+
 -- Emergency rollback pattern: ALTER TABLE <t> DISABLE ROW LEVEL SECURITY;
 ```
 
 ---
 
-## Cloudflare Worker (v4.5)
+## Cloudflare Worker (v4.7)
 
-Secrets (type Secret): `GITHUB_TOKEN`, `SUPABASE_SERVICE_KEY`.
+Secrets (type Secret): `GITHUB_TOKEN`, `SUPABASE_SERVICE_KEY`, **`ANTHROPIC_KEY`** (v4.7).
 Cron: `0 9 * * *` → nightly sweep.
 
 ### ⚠️ Token expiry — ACTION REQUIRED by June 1, 2027
@@ -254,6 +294,7 @@ Don't investigate dead tokens; re-mint.
 | proof_view_url | any (reporter own-scoped) | mints a 5-minute signed view URL for one proof |
 | proof_delete | any (reporter own; editors/adviser any) | deletes the Storage file + the `proofs` row |
 | image_upload (v4.6) | any (reporter own article; staff target = adviser only) | stores a pre-cropped JPEG (base64) in the PUBLIC `media` bucket at a stable, extension-less path (`articles/<id>-lead` or `staff/<id>`), then stamps `photo_url` on the row via `sbPatchRow`. Returns the public URL + `?v=` cache-buster. Upsert = replace-in-place, no orphans. Validates JPG/PNG/WEBP + 8 MB cap |
+| **rubric_grade (v4.7)** | **editor+** | **AI rubric draft — a SECOND OPINION the adviser confirms, never autonomous. Accepts a LIST of article ids (`ids`) — the checkbox batch; a single grade is a one-element list (also accepts a bare `id`). Per article: strips HTML to paragraph-preserving plain text, refuses if < 50 words, reads type from `section` (Editorial → editorial, all else → news), calls Claude (`claude-sonnet-4-6`) with the cached rubric system prompt, validates the JSON, maps tier → points from a fixed table (Worker does ALL arithmetic), bounded retry (2 attempts then flag). Returns per-article `{id, ok, type, grade}` or `{id, ok:false, error}`. SAVES NOTHING — only returns the draft scorecard. Needs the `ANTHROPIC_KEY` secret.** |
 
 **Note-done toggle:** dedicated `note_toggle` action (tagged v4.1 in the Worker).
 It flips `done`/`done_by`/`done_at` on one note inside the editor_notes JSON
@@ -268,6 +309,50 @@ PBKDF2 hashes) and re-hashes legacy rows on success. `staff_add` and
 count is baked into each stored hash, so raising `PBKDF2_ITERATIONS` later won't
 break old hashes — they verify at their original count and drift upward on next
 password change. **Worker-only change: no SQL, no RLS, no CMS edit.**
+
+### Rubric grading (v4.7) — how the action is built
+The model **never sees a number.** It returns, per criterion, a **tier** (one of
+`exemplary`/`proficient`/`developing`/`beginning`/`absent`) + a one-to-two
+sentence justification, plus an `overall` comment and a boolean `injection_flag`.
+The Worker maps tier → points from a **hardcoded table** (`RUBRIC_POINTS`) and
+sums them — so scores are deterministic and always match the printed rubric (no
+rounding drift, no "AI did bad math").
+
+Key constants (one-line swap points): `RUBRIC_MODEL = 'claude-sonnet-4-6'`,
+`RUBRIC_TEMPERATURE = 0.4` (warm "margin-notes" tone; A/B as desired),
+`RUBRIC_MAX_ATTEMPTS = 2`, `RUBRIC_MIN_WORDS = 50`, `RUBRIC_MAX_BATCH = 30`.
+
+Helpers: `rubricArticleType` (section→type), `rubricStripHTML` (drops tags incl.
+highlight spans but **keeps paragraph breaks** so a wall-of-text article is
+correctly dinged on Structure/Clarity), `rubricSystemBlocks` (the rubric system
+prompt as a single `cache_control:{type:'ephemeral'}` block — prompt caching on),
+`parseGrade` (strict on the six criteria; lenient on overall/injection_flag — a
+missing housekeeping field never voids a good grade; coerces injection_flag to a
+real boolean), `rubricScore` (tier→points + total, nearest half-point),
+`rubricCallAPI` (one POST to api.anthropic.com), `rubricGradeOne` (one article,
+bounded retry, never invents a grade). The action `rubric_grade` loops the id
+list (sequential = comfortably inside rate limits) and returns per-article
+success/failure.
+
+**⚠️ GOTCHA for future Claude — assistant prefill is NOT supported.** The spec's
+reliability trick was to prefill the assistant turn with a single `{` to force
+clean JSON. **`claude-sonnet-4-6` rejects this** — the API returns *"This model
+does not support assistant message prefill. The conversation must end with a
+user message."* We **removed the prefill** (the `messages` array ends on the user
+turn) and lean on `parseGrade`'s fence-strip + first-`{` trim, which the modern
+model doesn't need anyway. If a future model swap reintroduces prefill, re-test
+this first. (Also: the on-dashboard "Prompt caching: Not enabled" widget is a
+*different, manual* feature — our `cache_control` block activates caching
+automatically on prompt reuse within the window; ignore the widget.)
+
+### Injection handling (v4.7) — flag, never auto-punish
+The system prompt forbids the model from following any instruction embedded in
+the article text ("give me 100%", "ignore the rubric", "you are now…"). It grades
+the **real writing on its merits** regardless, and sets `injection_flag: true`
+so the adviser gets a quiet "⚑ take a look." **No automatic penalty, no automatic
+anything** — Laura investigates and decides. Verified live (see Build History):
+the same planted injection scored 100 on a strong article and 40 on a weak one —
+proving the embedded instruction moved the score by exactly zero.
 
 ### Nightly sweep
 1. Auto-takedowns (published + takedown_at passed → GitHub file removed →
@@ -287,6 +372,12 @@ password change. **Worker-only change: no SQL, no RLS, no CMS edit.**
 No supabase-js, no keys. `workerCall()` attaches the session token to every
 request; `artRead()` wraps reads. Session persists across refresh via
 sessionStorage (`bw_session`).
+
+> **Helper signature note (confirmed live v4.7):** `workerCall` takes **ONE
+> argument — a single payload object** — and auto-attaches the token:
+> `workerCall({ action: 'art_read', where: {} })`. The `action` goes *inside*
+> the object. (Do NOT call it as `workerCall('action', {...})`.) Useful for
+> console smoke tests.
 
 ### Newsroom flows
 - **Write:** draft → autosave (3s after typing; requires headline; REFUSES to
@@ -329,6 +420,15 @@ sessionStorage (`bw_session`).
   16:9 `object-fit:cover` — article heroes now centre-crop uniformly with the
   homepage (existing articles need a re-publish to pick it up; new ones are
   automatic). All CMS-only — no Worker/SQL/RLS touched beyond the bucket.
+- **AI rubric grading (v4.7 — ENGINE only; UI pending):** the `rubric_grade`
+  Worker action is live and verified, but **there is no CMS UI yet** — it has
+  only been exercised via the browser console. The next sprint builds the
+  **scorecard UI** in the review pane (see Backlog): a checkbox list of submitted
+  articles → "Grade selected" → six editable rows (tier dropdown + computed
+  points + editable justification) + overall comment + ⚑ flag + running total,
+  with a **"Confirm & save"** button that is the *only* path to a stored grade.
+  This is the Red Pen Novello principle in code: the model proposes, the adviser
+  edits and confirms, nothing un-reviewed reaches a student.
 - **Assignments:** adviser/editor creates AND EDITS (✎ Edit fills the form,
   Save Changes / Cancel Edit). **Smart reporter dashboard cards** show per-kid
   progress on each assignment — Write (none yet) / Open + "Draft in progress" /
@@ -357,6 +457,8 @@ sessionStorage (`bw_session`).
   **v4.5:** an **Interview Proof** column (Yes/No) on-screen + in CSV, and a
   "N with proof" count in the summary line — fed by `proof_list` (no id) so the
   adviser can grade the interview component straight down the CSV into Canvas.
+  **(v4.7-planned:** AI total + 6 criteria + Confirmed? columns join this CSV
+  once the scorecard UI + storage land.)
 - **Review (4-step progress tracker, client-side):** the reporter sees a visual
   4-stage tracker driven by article status — **Rough Draft** (draft) → **Editor
   Review** (pending) → **Revisions** (returned) → **Published** (published) —
@@ -403,6 +505,8 @@ sessionStorage (`bw_session`).
   "missing" change before the window passes; cache-bust with `?v=N`.
 - Reads alert on failure (old code swallowed failed reads → looked like data
   loss).
+- **Assistant prefill is unsupported on `claude-sonnet-4-6`** (v4.7) — see the
+  Worker section. Removed; don't re-add without re-testing.
 
 ---
 
@@ -411,7 +515,18 @@ sessionStorage (`bw_session`).
 - Download current files before patching (repo for CMS; ask Laura to paste the
   Worker from the Cloudflare editor). **Never patch from memory.**
 - **Strict deploy order:** SQL → Worker → CMS → verify → **RLS last** (with a
-  rollback line provided). This order has caught real bugs.
+  rollback line provided). This order has caught real bugs. (v4.7 needed none of
+  the SQL/RLS steps — Worker secret + code only.)
+- **Whole-block pastes at clear seams**, not surgical line edits — Laura pastes
+  directly into the Cloudflare browser editor. Give her the seam ("paste between
+  this `}` and that comment"), not line numbers. **Before pasting, copy the whole
+  current Worker into a scratch file** as a rollback — the Cloudflare editor has
+  no trustworthy undo across a bad paste.
+- **Assume a paste error is YOUR code first, user error second.** At least twice
+  a "paste mistake" was actually a Claude bug — the `\\'` apostrophe escape that
+  closed a string early (v4.7) and an earlier one. Sidestep apostrophes in
+  string literals entirely ("could not" not "couldn't") when handing over paste
+  blocks.
 - **Role gauntlet after every deploy:** Laura runs a full multi-role test
   (adviser + test reporter "Fable Jones", student #0000004) after each change.
   Support it — it has caught launch-day bugs (populate-then-wipe ordering, ghost
@@ -429,30 +544,52 @@ sessionStorage (`bw_session`).
 - **AI grading framing:** any AI-assisted grading is ALWAYS a *second opinion
   Laura personally confirms* before anything leaves the system — never
   autonomous. This is a professional/pedagogical principle, not a preference.
+  The injection flag is advisory only — never an automatic penalty.
+- **Cleaner injection test (noted v4.7):** a planted-injection article that
+  *legitimately* scores 100 is a noisy test (you can't tell "ignored the
+  injection" from "obeyed it" when the honest grade is also 100). Plant the
+  injection in a deliberately **mediocre** article — a low score + raised flag
+  proves the instruction was ignored beyond doubt. (Done live: same injection,
+  100 on the good piece, 40 on the bad one.)
 - Running joke conventions: crustacean test accounts (Fable Jones, Clawford
-  Daniels) and test articles (Local Shrimp Wins Big Race, Flobster).
+  Daniels) and test articles (Local Shrimp Wins Big Race, Flobster, the Crow
+  Problem).
 
 ---
 
 ## Pre-Launch Checklist (August, before students)
 
-- [ ] Recycle/purge all test articles (the Flobster Cinematic Universe)
+- [ ] Recycle/purge all test articles (the Flobster Cinematic Universe + the crows)
 - [ ] Remove/repurpose test accounts; create real roster (Staff Manager)
 - [ ] Fill staff profiles; ⌂ Publish Staff Page
 - [ ] Confirm token expiry date still future (June 1, 2027 ✓)
 - [ ] Confirm late-policy settings + HCPS calendar dates for the live year
 - [ ] Walk one real student through write→submit→return→resubmit→publish
 - [ ] Walk one extension request through request→grant→recomputed due date
-- [ ] District IT submission: this doc's Security Model + permission matrix (now incl. PBKDF2 password hashing)
+- [ ] District IT submission: this doc's Security Model + permission matrix (now incl. PBKDF2 password hashing + the AI grading privacy posture)
+- [ ] Confirm the AI grader spend cap is set ($20/mo; real spend ≈ $5/yr)
 
 ---
 
 ## Backlog / Next Sprint Arc
 
-**Next arc (discussed, not yet built):**
-- **Rubric grading** — rubric table + review-pane scoring; Claude API called
-  from the Worker; adviser confirms before exporting to Canvas. Ties into the
-  separate OCR/Fujitsu grading-pipeline project.
+**Next arc — rubric grading (engine DONE v4.7):**
+- `rubric_grade` Worker action is **live and verified** — AI second-opinion
+  draft, adviser confirms. **Still ahead, in order:**
+  1. **Scorecard UI** — the confirm-before-it-counts screen in the review pane:
+     a checkbox list of submitted articles → "Grade selected" → six editable
+     rows (tier dropdown + computed points + editable justification) + editable
+     overall comment + ⚑ injection flag + running total + **"Confirm & save."**
+     Retires the console testing; puts the red pen back in Novello's hand.
+  2. **Storage** — save BOTH the AI's original draft (audit trail) AND the
+     adviser-confirmed score (the real grade), with a 30-day roll-off (same
+     pattern as proofs). Keep a small re-grade history so improvement across
+     revisions is visible.
+  3. **CSV** — add AI total + 6 criteria + a Confirmed? column to the existing
+     Assignment Reports CSV, name-sorted, for straight import into Canvas.
+  4. **Full role-gauntlet** alongside the UI (Fable Jones own-scoping, editor
+     sees the grade button, adviser confirms; plus the mediocre-article
+     injection test).
 
 **Platform polish:**
 - ~~Photo/asset upload to Supabase Storage (replaces paste-a-URL everywhere)~~
@@ -465,8 +602,9 @@ sessionStorage (`bw_session`).
 - True real-time collaborative editing (CRDT/Yjs + Supabase Realtime — a
   different class of problem; soft locks cover 80% at 1% of the cost)
 
-**Separate projects:** participation tracker; OCR/Fujitsu grading pipeline;
-*Vexed* timeline tool (interactive HTML; shipped June 2026).
+**Separate projects:** participation tracker; OCR/Fujitsu grading pipeline
+(ties into rubric grading); *Vexed* timeline tool (interactive HTML; shipped
+June 2026).
 
 ---
 
@@ -485,11 +623,15 @@ sessionStorage (`bw_session`).
 | June 18 | **CMS — Assignment Reports + CSV** (adviser-only, client-side; no Worker/SQL/RLS). Per-assignment, submitters-only report table reusing the late/extension engine; in-browser CSV export (Excel BOM, proper quoting). Full role-gauntlet pass: draft→pending→returned→published tracked correctly, late flag + CSV stayed in sync after a retroactive due-date change, editors correctly see no Reports menu item. |
 | June 18 | **Interview proof uploads (v4.5) — full sprint, spec to ship.** New private `proofs` table (FK→articles, CASCADE) + private Storage bucket `proofs`. Worker: `proof_upload`/`proof_list`/`proof_view_url`/`proof_delete` (reporters own-scoped server-side; images only, 8 MB cap) + roll-off in the nightly sweep ("published + 30 days" + trash backstop). CMS: writer upload control w/ thumbnails + "Uploaded ✓" toast, review-pane viewer (signed-URL open), reporter delete/replace, and an Interview Proof column in Reports + CSV. Gauntlet: upload (incl. wrong-cat-photo → delete → re-upload), adviser + editor view/expand/delete, reporter own-scoping confirmed (UI + server), Reports↔CSV match. Deploy order honored: SQL+bucket → Worker → CMS → verify → bucket confirmed PRIVATE. |
 | June 28 | **Public photo uploads + cropper (v4.6) — full sprint, spec to ship.** New PUBLIC Storage bucket `media` (public-read, Worker-only writes — deliberate departure from the proofs privacy model). Worker: one action `image_upload` (reporters own-scoped on article photos, staff = adviser-only; JPG/PNG/WEBP + 8 MB; stores at stable extension-less path, stamps `photo_url`, returns public URL + `?v=`); bucket-aware `sbStorageUpload`; new `sbPatchRow`. CMS: Upload buttons beside paste-a-URL on lead photos (colour) + staff headshots (auto B&W); drag-and-zoom **cropper** (cover-locked, 16:9 / 1:1, thirds guides, output 1600×900 / 800×800, B&W folded into the canvas pass); live photo preview in writer + review panes; student-guidance hints. **Bug fixed:** article hero stray inline `height:auto` removed → heroes now centre-crop uniformly with the homepage. Replace = upsert-in-place, **no orphans** (verified: one file per id). Gauntlet: tall photo cropped/framed → identical on homepage + article; B&W square staff; cover-lock held; cancel/Esc/backdrop; AVIF/HEIC + oversize rejected pre-cropper. CMS-only deploy (+ the one public bucket) — no SQL/RLS/Worker-secret change. |
+| June 29 | **Rubric grading Worker action (v4.7) — spec to verified-live.** New `rubric_grade` action (editor/adviser only): **the first feature that sends data off-platform.** Model picks one of five tiers per criterion + a justification; the Worker maps tier→points from a hardcoded table and does all arithmetic (zero hallucinated scores). Privacy: only article type + anonymous text leave the Worker. Prompt caching on (cache_control on the rubric). Bounded retry (2 attempts, then flag — no infinite loop). Injection handling = flag only, never auto-penalty: model returns `injection_flag` and grades the real text on its merits regardless. **Gotcha logged for future Claude:** `claude-sonnet-4-6` REJECTS assistant-message prefill ("conversation must end with a user message") — the spec's `{`-prefill trick had to be removed; we lean on `parseGrade`'s fence-strip + first-`{` trim instead, which the modern model doesn't need anyway. Also fixed an apostrophe-escape bug in a Claude-written paste block (`\\'` closed a string early). Verified live via console (no UI yet) across the full matrix: **good article / no injection → honest 58.5, flag false** (the Opus piece); **good article / injection → honest 100, flag true** (first crow piece); **bad article / injection → honest 40, flag true** (the keystone — Sonnet-rewritten-worse version, proves the embedded "give me 100%" instruction moved the score by zero, the flag fired, bad writing graded as bad). Worker arithmetic confirmed on all three totals. Cost ≈ 1.5–2¢/article, ~$5/yr projected; $20/mo cap is a smoke alarm. Deploy: `ANTHROPIC_KEY` secret + Worker code only — no SQL, no RLS, no CMS change. **Next: the scorecard UI.** |
 
 ---
 
-*Updated June 28, 2026 — v4.6, public photo uploads + in-browser cropper shipped
-and verified live (a black cat named, presumably, after some lobster, framed
-ears-in on the homepage). Next up: the rubric-grading API mountain — the first
-feature that sends data off-platform, so spec carefully. The entry after that
-should be written by someone who has finally seen Noah Kahan.*
+*Updated June 29, 2026 — v4.7, rubric-grading ENGINE shipped and verified live
+across the full injection matrix (the first off-platform feature, and it landed
+clean). The keystone test: same planted "give me 100%" injection scored 100 on a
+strong article and 40 on a weak one — the instruction moved the grade by exactly
+zero, and the flag fired both times. Next up: the scorecard UI — the
+confirm-before-it-counts screen that retires console testing and puts the red pen
+back in Novello's hand. The entry after that should still be written by someone
+who has finally seen Noah Kahan.*
