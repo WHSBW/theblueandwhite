@@ -281,6 +281,7 @@
           <div class="toast toast-success" id="write-toast"></div>
           <div id="lock-warn-write" class="lock-warn" style="display:none;"></div>
           <div class="stage-box" id="write-stage"></div>
+          <div id="grade-feedback-panel" style="display:none;"></div>
           <div class="form-grid">
             <div class="form-group">
               <label class="form-label">Section <span class="req">*</span></label>
@@ -1061,6 +1062,7 @@ async function loadArticleForEdit(id) {
     document.getElementById('returned-notes-section').style.display = 'none';
   }
   renderWriteStage(data.status || 'draft', writeNotes.length > 0, { assignmentLinked: !!data.assignment_id });
+  loadGradeFeedback(id);
   // Fetch this article's extension (if any) and re-render the stage with it.
   if (data.assignment_id) {
     getExtensionMap().then(extMap => {
@@ -1454,6 +1456,58 @@ async function returnArticle() {
 
 let reviewNotes = [];
 let writeNotes = [];
+
+// ── Student grade feedback (v4.9) ──
+// Shows the LATEST confirmed grade for this article, in whatever mode the
+// adviser released. Reuses grade_feedback (reporter-own-scoped server-side).
+// Never shows the AI draft, an unreleased number, or history.
+const SF_CRIT = [
+  { key:'lead', label:'Lead', max:15 },
+  { key:'structure', label:'Structure / Inverted Pyramid', max:20 },
+  { key:'angle', label:'Angle & News Value', max:15 },
+  { key:'clarity', label:'Clarity & Accessibility', max:15 },
+  { key:'interview', label:'Interview / Source Integration', max:20 },
+  { key:'mechanics', label:'Mechanics & Style', max:15 },
+];
+const SF_TIER_LABEL = { exemplary:'Exemplary', proficient:'Proficient', developing:'Developing', beginning:'Beginning', absent:'Not present' };
+async function loadGradeFeedback(articleId){
+  const box = document.getElementById('grade-feedback-panel');
+  if (!box) return;
+  box.style.display = 'none'; box.innerHTML = '';
+  let fb = null;
+  try { const r = await workerCall({ action:'grade_feedback', article_id: articleId }); fb = r.feedback; }
+  catch(e){ return; }
+  if (!fb) return;   // not graded / not released / not theirs
+
+  const showTiers = (fb.mode === 'full' || fb.mode === 'rubric');
+  const showComments = (fb.mode === 'full' || fb.mode === 'comments');
+
+  let h = '<div class="section-div" style="margin-top:16px;">Your Rubric Feedback</div>';
+  if (fb.total != null){
+    h += '<div style="font-size:22px;font-weight:700;color:var(--navy);margin-bottom:2px;">'+fb.total+' / 100</div>';
+  }
+  h += '<div style="font-size:11px;font-style:italic;color:var(--text-muted);margin-bottom:12px;">Final grade of record resides in the HCPS Canvas gradebook.</div>';
+
+  SF_CRIT.forEach(c=>{
+    const cc = (fb.criteria && fb.criteria[c.key]) || {};
+    const hasTier = showTiers && cc.tier;
+    const hasJust = showComments && cc.justification;
+    if (!hasTier && !hasJust) return;
+    h += '<div style="border-bottom:1px solid #eee;padding:9px 0;">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">'+
+         '<strong style="font-size:13px;">'+escHtml(c.label)+'</strong>'+
+         (hasTier ? '<span style="font-size:13px;color:var(--navy);font-weight:600;white-space:nowrap;">'+escHtml(SF_TIER_LABEL[cc.tier]||cc.tier)+(cc.points!=null?' · '+cc.points+'/'+c.max:'')+'</span>' : '')+
+         '</div>';
+    if (hasJust) h += '<div style="font-size:13px;color:#444;margin-top:4px;line-height:1.5;">'+escHtml(cc.justification)+'</div>';
+    h += '</div>';
+  });
+  if (showComments && fb.overall){
+    h += '<div style="padding:10px 0;"><strong style="font-size:13px;">Overall</strong>'+
+         '<div style="font-size:13px;color:#444;margin-top:4px;line-height:1.5;">'+escHtml(fb.overall)+'</div></div>';
+  }
+  box.innerHTML = h;
+  box.style.display = 'block';
+}
 
 // ── Workflow stage indicator (the chain) ──
 // Shows the reporter which step they're on and, in italics, exactly what to do.
@@ -2571,7 +2625,7 @@ async function gradeRunSelected(){
         working[c.key] = { tier: g.tier || 'developing', justification: g.justification || '' };
       });
       working.overall = r.grade.overall || '';
-      _gradeDrafts[r.id] = { type: r.type, ai: r.grade, working: working, confirmed: false };
+      _gradeDrafts[r.id] = { type: r.type, ai: r.grade, working: working, confirmed: false, releaseMode: 'full' };
       newBatch.push(r.id);
     } else {
       failed.push((_gradeArticles[r.id] ? _gradeArticles[r.id].name : r.id) + ' — ' + (r.error||'failed'));
@@ -2634,6 +2688,7 @@ async function gradeRenderOverlay(){
   h += '<div style="display:flex;justify-content:space-between;align-items:baseline;">'+
        '<div style="font-size:13px;color:#777;">Article '+(_gradeIdx+1)+' of '+_gradeBatch.length+' · '+escHtml(meta.name||'')+'</div>'+
        '<button class="btn btn-sm" onclick="gradeCloseOverlay()">✕ Close</button></div>';
+  h += '<div id="grade-history"></div>';
   if (draft.ai && draft.ai.injection_flag){
     h += '<div style="background:#fff4e5;border:1px solid #f0c98b;border-radius:6px;padding:10px 12px;margin:10px 0;font-size:13px;color:#7a4a00;">'+
          '⚑ This article contains text aimed at the grader. The score below reflects the real writing only — take a look and decide.</div>';
@@ -2661,6 +2716,16 @@ async function gradeRenderOverlay(){
        '<textarea class="form-input" style="margin-top:8px;font-size:13px;min-height:54px;" '+
        'oninput="gradeSetOverall(this.value)" placeholder="A sentence or two for your records…">'+escHtml(w.overall||'')+'</textarea></div>';
 
+  // Release mode — what the STUDENT sees once you confirm.
+  const rm = draft.releaseMode || 'full';
+  h += '<div style="padding:12px 0;border-top:1px solid #eee;">'+
+       '<strong style="font-size:14px;">Release to student</strong>'+
+       '<div style="font-size:12px;color:#888;margin:2px 0 8px;">What the writer sees in their CMS after you confirm. You always get the full grade regardless.</div>'+
+       '<label style="display:block;font-size:13px;margin:3px 0;cursor:pointer;"><input type="radio" name="rmode" value="full"'+(rm==='full'?' checked':'')+' onchange="gradeSetMode(\'full\')"> Rubric + comments <span style="color:#aaa;">(everything)</span></label>'+
+       '<label style="display:block;font-size:13px;margin:3px 0;cursor:pointer;"><input type="radio" name="rmode" value="rubric"'+(rm==='rubric'?' checked':'')+' onchange="gradeSetMode(\'rubric\')"> Rubric only <span style="color:#aaa;">(tiers, points, total — no comments)</span></label>'+
+       '<label style="display:block;font-size:13px;margin:3px 0;cursor:pointer;"><input type="radio" name="rmode" value="comments"'+(rm==='comments'?' checked':'')+' onchange="gradeSetMode(\'comments\')"> Comments only <span style="color:#aaa;">(feedback, no score shown — great for practice rounds)</span></label>'+
+       '</div>';
+
   h += '<div style="position:sticky;bottom:0;background:#fff;border-top:2px solid #e2e2e2;padding:14px 0;display:flex;justify-content:space-between;align-items:center;gap:10px;">';
   h += '<div style="font-size:20px;font-weight:700;">Total: <span id="grade-live-total">'+gradeLiveTotal(w)+'</span> / 100'+
        (draft.confirmed ? ' <span style="color:#1a7f37;font-size:13px;font-weight:600;">✓ saved</span>' : '')+'</div>';
@@ -2671,6 +2736,7 @@ async function gradeRenderOverlay(){
   h += '</div></div>';
 
   right.innerHTML = h;
+  gradeRenderHistory(id);
 }
 function gradeSetTier(key, val){
   const id = _gradeBatch[_gradeIdx];
@@ -2682,6 +2748,46 @@ function gradeSetTier(key, val){
 }
 function gradeSetJust(key, val){ _gradeDrafts[_gradeBatch[_gradeIdx]].working[key].justification = val; }
 function gradeSetOverall(val){ _gradeDrafts[_gradeBatch[_gradeIdx]].working.overall = val; }
+function gradeSetMode(m){ _gradeDrafts[_gradeBatch[_gradeIdx]].releaseMode = m; }
+
+// History strip: prior confirmed versions for THIS article (adviser-only, read-only).
+async function gradeRenderHistory(articleId){
+  const host = document.getElementById('grade-history');
+  if (!host) return;
+  host.innerHTML = '';
+  let rows = [];
+  try { const r = await workerCall({ action:'grade_list', article_id: articleId }); rows = r.rows || []; }
+  catch(e){ return; }
+  if (rows.length < 1) return;
+  const parts = rows.map(g=>{
+    const when = g.confirmed_at ? formatDate(g.confirmed_at) : '';
+    return '<button class="btn btn-sm" style="margin:2px 4px 2px 0;" onclick="gradeShowVersion(\''+_attr(articleId)+'\','+(g.version||0)+')">v'+(g.version||0)+' · '+(g.confirmed_total!=null?g.confirmed_total:'?')+'/100'+(when?' · '+when:'')+'</button>';
+  }).join('');
+  host.innerHTML = '<div style="font-size:12px;color:#888;margin:8px 0 4px;">Previously saved versions (only you see these):</div>'+parts;
+}
+let _gradeHistCache = {};
+async function gradeShowVersion(articleId, version){
+  let rows = _gradeHistCache[articleId];
+  if (!rows){
+    try { const r = await workerCall({ action:'grade_list', article_id: articleId }); rows = r.rows||[]; _gradeHistCache[articleId]=rows; }
+    catch(e){ return; }
+  }
+  const g = rows.find(x=>(x.version||0)===version);
+  if (!g) return;
+  const cg = g.confirmed_grade || {};
+  let body = '<div style="font-size:13px;"><strong>Version '+version+'</strong> — '+(g.confirmed_total!=null?g.confirmed_total:'?')+'/100 · released as '+escHtml(cg.release_mode||'full')+'</div>';
+  GRADE_CRIT.forEach(c=>{
+    const cc = cg[c.key]||{};
+    body += '<div style="border-bottom:1px solid #eee;padding:6px 0;font-size:13px;"><strong>'+escHtml(c.label)+':</strong> '+escHtml(GRADE_TIER_LABEL[cc.tier]||cc.tier||'—')+(cc.justification?' — '+escHtml(cc.justification):'')+'</div>';
+  });
+  if (cg.overall) body += '<div style="padding:6px 0;font-size:13px;"><strong>Overall:</strong> '+escHtml(cg.overall)+'</div>';
+  const host = document.getElementById('grade-history');
+  if (host){
+    let pop = document.getElementById('grade-hist-pop');
+    if (!pop){ pop = document.createElement('div'); pop.id='grade-hist-pop'; pop.style.cssText='margin-top:8px;padding:10px 12px;background:#f7f7f9;border:1px solid #e2e2e2;border-radius:6px;'; host.appendChild(pop); }
+    pop.innerHTML = body + '<div style="margin-top:6px;"><button class="btn btn-sm" onclick="this.closest(\'#grade-hist-pop\').remove()">Close history</button></div>';
+  }
+}
 
 async function gradeConfirmSave(){
   const id = _gradeBatch[_gradeIdx];
@@ -2695,7 +2801,7 @@ async function gradeConfirmSave(){
       article_id: id,
       article_type: draft.type,
       ai_draft: draft.ai,                  // full AI draft for the audit trail
-      confirmed: draft.working,            // your edited tiers + justifications + overall
+      confirmed: Object.assign({}, draft.working, { release_mode: draft.releaseMode || 'full' }),
     });
   } catch(e){ res = { error: e.message }; }
   if (btn){ btn.disabled = false; btn.textContent = 'Confirm & save'; }
