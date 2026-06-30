@@ -1004,10 +1004,14 @@ async function renderMyAssignmentsPanel(assignListElId, myListElId) {
   const mList = document.getElementById(myListElId);
   const dueMap = {};
   (assignments||[]).forEach(a => { if (a.due_date) dueMap[a.id] = a.due_date; });
-  if (!articles || articles.length === 0) {
+  // Hide trashed articles from the dashboard — they live in the Recycle Bin, not
+  // here. (A draft swept by the 45-day roll-off becomes trashed; it should vanish
+  // from view, not linger with a TRASHED tag.)
+  const visible = (articles || []).filter(a => a.status !== 'trashed');
+  if (!visible || visible.length === 0) {
     mList.innerHTML = '<div class="empty">No articles yet. Hit Write Article to get started.</div>';
   } else {
-    mList.innerHTML = articles.map(a => `
+    mList.innerHTML = visible.map(a => `
       <div class="queue-item" onclick="loadArticleForEdit('${a.id}')">
         <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
         <div class="q-info">
