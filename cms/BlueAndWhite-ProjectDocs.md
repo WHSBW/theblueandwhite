@@ -2,7 +2,42 @@
 **Paul R. Wharton High School Student Newspaper**
 *For Laura Novello (adviser) and future Claude instances picking up this project*
 
-> **Version note (June 29, 2026):** This is the **v4.9** doc. v4.9 completed the
+> **Version note (June 30, 2026):** This is the **v4.10** doc. v4.10 cleared one
+> of the two open items and added a hygiene feature. Two arcs landed: (1) **Editor
+> dashboard cards** — editors are both editors AND reporters (they write too), but
+> only the *reporter* dashboard surfaced assignment cards/progress. The editor
+> dashboard now has a **tab toggle: Review Queue ↔ My Assignments**. Review Queue
+> is the existing editing-duties view (stats + pending queue + ext inbox); My
+> Assignments mirrors the reporter dashboard for the editor's OWN articles (same
+> five states, same cards, same "click opens the existing article" behavior). Built
+> by extracting the reporter dashboard's card logic into a shared
+> `renderMyAssignmentsPanel(assignListElId, myListElId)` so the two views can't
+> drift — `loadReporterDash` and the new `loadEditorMyAssignments` both call it
+> with their own element ids. `switchEditorDashTab` toggles the panels; `showView`
+> resets to the queue tab on entry. (Also fixed: `requestExtension` hardcoded a
+> refresh to `loadReporterDash`, which would silently refresh the wrong hidden
+> panel for an editor — now role-aware.) CMS-only. (2) **Stale draft roll-off** —
+> kids learning the page leave heaps of abandoned "dgdkjg" drafts. A new nightly
+> sweep step (#6) trashes any `draft` untouched for **45 days** (role-blind:
+> reporter/editor/adviser alike) → it lands in the **Recycle Bin**, NOT hard-
+> deleted, so it rides the existing 30-day purge (**75 days total** worst case,
+> with a restore window). Clock is a NEW `updated_at` column on `articles`, stamped
+> by `art_save` on every write (so a draft someone's actively revising across weeks
+> is NOT swept — last-touch, not first-created). Deploy was **SQL → Worker**: one
+> `ALTER TABLE articles ADD COLUMN updated_at` + a backfill `UPDATE ... = created_at`
+> (without the backfill, pre-existing drafts have null `updated_at` and dodge the
+> sweep forever). **New Dragon, exposed by this feature:** trashed articles were
+> showing on the dashboard's "My Submissions" list with a TRASHED badge instead of
+> being hidden — drafts rarely got trashed before, so nobody noticed; the roll-off
+> changes that. Fixed by filtering `status !== 'trashed'` in
+> `renderMyAssignmentsPanel` (so it lands on BOTH the reporter and editor views).
+> Verified live end-to-end: backdated a test draft's `updated_at` to 46 days, the
+> sweep filter caught it, it trashed → vanished from the student dashboard → sat
+> restorable in the adviser's Recycle Bin. **Still open (NOT done):** the harmless
+> `favicon.ico` 404 in console (cosmetic) — now the ONLY remaining backlog item.
+> Laura's corrections are authoritative.
+>
+> **Version note (June 29, 2026):** This was the **v4.9** doc. v4.9 completed the
 > **rubric-grading arc** — it turned the v4.7 engine into a full, usable loop and
 > closed the question v4.7/v4.8 left open ("what does the student ever see?").
 > Three things landed: (1) **storage** — a new private `rubric_grades` table; the
@@ -99,7 +134,7 @@
 | Hosting | GitHub Pages (free, public repo) |
 | Domain registrar | Namecheap (CNAME points to GitHub Pages) |
 | Backend database | Supabase (project ID: `cybjclqcdmrjhoaoiund`) |
-| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.9** |
+| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.10** |
 | File storage | Supabase Storage — private bucket `proofs` (interview proofs; signed-URL only) **and** PUBLIC bucket `media` (article lead photos + staff headshots; public-read, Worker-only writes) |
 | AI grading | Anthropic API (`claude-sonnet-4-6`), called from the Worker via the `ANTHROPIC_KEY` secret. **Adviser-only**, second opinion only; adviser confirms. Confirmed scores stored in `rubric_grades` (append/history); students see released feedback in-CMS; **Canvas is the grade of record (hand-keyed)** |
 | CMS URL | https://blueandwhitewhs.com/cms/ |
@@ -117,7 +152,7 @@ Reporter/Editor (browser)
         │  login → Worker checks credentials, issues 12-hour session token
         │  EVERY data operation: POST {action, token, ...}
         ▼
-Cloudflare Worker (v4.9)  ◄── secrets: GITHUB_TOKEN, SUPABASE_SERVICE_KEY, ANTHROPIC_KEY
+Cloudflare Worker (v4.10) ◄── secrets: GITHUB_TOKEN, SUPABASE_SERVICE_KEY, ANTHROPIC_KEY
    │         │      ◄── Cron Trigger 0 9 * * * (nightly sweep, 4–5 AM Tampa)
    │         └── Supabase REST (service role) — ALL reads & writes for the CMS
    │  PUT/DELETE files via GitHub Contents API
@@ -221,7 +256,9 @@ trashed) · github_path · **assignment_id** (links to assignments; '' = free
 write) · trashed_at · takedown_at · editor_notes (**JSON array** of
 {by, at, text, **done, done_by, done_at**}; the done trio is written by
 `note_toggle`; legacy plain text auto-wrapped) ·
-word_count + analytics columns · created/submitted/published_at
+word_count + analytics columns · created/submitted/published_at · **updated_at**
+(v4.10 — last-touch timestamp; stamped by `art_save` on every reporter write;
+drives the 45-day stale-draft roll-off; backfilled from `created_at` on existing rows)
 
 ### users
 id · name · student_number · password_hash (salted PBKDF2 hash as of v4.4; legacy plain-text rows upgrade on next login; RLS-locked) · role ·
@@ -341,12 +378,19 @@ ALTER TABLE rubric_grades ENABLE ROW LEVEL SECURITY;
 
 -- v4.9 (student feedback + reopen-edit): NO SQL — all Worker code + CMS.
 
+-- v4.10 (stale-draft roll-off): one column + a one-time backfill. The backfill
+--   is NOT optional — without it, every draft created before this column existed
+--   has a null updated_at and would dodge the 45-day sweep forever.
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS updated_at timestamptz;
+UPDATE articles SET updated_at = created_at WHERE updated_at IS NULL;
+-- Emergency rollback: ALTER TABLE articles DROP COLUMN updated_at;
+
 -- Emergency rollback pattern: ALTER TABLE <t> DISABLE ROW LEVEL SECURITY;
 ```
 
 ---
 
-## Cloudflare Worker (v4.9)
+## Cloudflare Worker (v4.10)
 
 Secrets (type Secret): `GITHUB_TOKEN`, `SUPABASE_SERVICE_KEY`, **`ANTHROPIC_KEY`** (v4.7). (v4.8/4.9 added no new secrets.)
 Cron: `0 9 * * *` → nightly sweep.
@@ -367,7 +411,7 @@ Don't investigate dead tokens; re-mint.
 | staff_list/add/update/remove | adviser | roster; remove detaches articles (byline survives), kills sessions; advisers unremovable |
 | change_password | any | verifies current first |
 | art_read | any | reporters force-scoped to own; filters: id/status/neq_status/author_id_self; whitelisted order columns |
-| art_save | any | insert/update with reporter field+status whitelist; author stamped from session |
+| art_save | any | insert/update with reporter field+status whitelist; author stamped from session. **v4.10: stamps `updated_at = now()` on every write** (the last-touch clock for the stale-draft sweep) |
 | art_admin | editor+ | full-field updates incl. any status |
 | art_destroy | editor+ | permanent row delete |
 | assign_list | any | all assignments (client filters by section) |
@@ -483,6 +527,13 @@ round-trip and across re-grades.
    `GRADE_ROLLOFF_DAYS` (30) measured from **`confirmed_at`** (not publish — a
    returned-but-graded article keeps its grade through revisions). District-IT
    hygiene; the adviser exports to CSV well inside the window.
+6. **Stale-draft roll-off (v4.10):** any `status='draft'` whose `updated_at` is
+   more than `DRAFT_ROLLOFF_DAYS` (45) ago is moved to `trashed` (sets
+   `trashed_at = now()`) — NOT hard-deleted, so it rides the 30-day Recycle Bin
+   purge in step 2 (75 days total, with a restore window). Role-blind. The clock
+   is `updated_at` (stamped by `art_save`), so a draft someone keeps revising
+   across weeks is protected from premature sweep. Catches the abandoned-
+   "dgdkjg" drafts kids leave while learning the page.
 
 ---
 
@@ -661,6 +712,16 @@ sessionStorage (`bw_session`).
   host (`host.querySelectorAll`), clear transient input state (checkboxes) after
   batch actions, and guard async renders (bail if the user moved during an await).
   Diagnose state bugs with a console probe of the actual state vars, not guesses.
+- **Filter `status='trashed'` out of EVERY reporter/editor-facing article list**
+  (v4.10) — the dashboard "My Submissions" list (`renderMyAssignmentsPanel`)
+  showed trashed articles with a TRASHED badge instead of hiding them. It went
+  unnoticed for a long time because drafts almost never got trashed — until the
+  45-day stale-draft roll-off started trashing them routinely, which exposed it.
+  A trashed article belongs in the Recycle Bin view only; everywhere else it
+  should vanish. Fix: `.filter(a => a.status !== 'trashed')` before render. Lesson:
+  a new feature that changes how often a state occurs can surface a latent bug in
+  code that handles that state — when adding a roll-off/auto-status-change, audit
+  every place that lists the affected rows.
 - **favicon.ico 404 in console** — cosmetic, harmless, ignorable. The page has no
   favicon; the browser logs a 404 and moves on. Not a bug; don't chase it. (Could
   add one for polish someday.)
@@ -741,12 +802,12 @@ sessionStorage (`bw_session`).
   the "why."
 
 **Open items (NOT done — next up):**
-- **Editor assignment notifications / dashboard cards.** Editors write articles
-  and have the same assignment deadlines as reporters, but only the *reporter*
-  dashboard surfaces assignment cards + progress + deadline cues. Editors should
-  get their own-article assignment view too. Its own small sprint (CMS-side;
-  mirror the reporter dashboard's assignment-card logic for editor accounts).
+- ~~**Editor assignment notifications / dashboard cards.**~~ **DONE v4.10** —
+  editor dashboard now has a Review Queue ↔ My Assignments tab toggle; My
+  Assignments mirrors the reporter dashboard for the editor's own articles via
+  the shared `renderMyAssignmentsPanel`.
 - **favicon.ico** — add one to kill the harmless console 404 (cosmetic polish).
+  **The only remaining backlog item.**
 
 **Platform polish:**
 - ~~Photo/asset upload to Supabase Storage (replaces paste-a-URL everywhere)~~
@@ -786,17 +847,21 @@ June 2026).
 | June 29 | **Student feedback + release modes (v4.9).** New `grade_feedback` action (reporter-own-scoped) returns ONLY the latest confirmed version's released parts — never the AI draft, an unreleased number, or history. Per-version **release_mode** (`full`/`rubric`/`comments`) stored inside `confirmed_grade` jsonb (no SQL). Student sees a "Your Rubric Feedback" panel in their write view (same real estate as editor notes) with the Canvas grade-of-record italic line. **Comments-only** = feedback with no score shown (the practice-round workflow). Canvas stays the grade of record (hand-keyed per district contract); the CMS hosts the "why." Verified live: comments-only hides the number for the student; rubric-only hides comments; full shows all; reporter can't read another's feedback. |
 | June 29 | **Batch-stepping bug fixes (v4.9.1).** Three live-found bugs in the grading overlay, all fixed CMS-only: (1) **wrong-article-opens** — checkbox reads were document-wide and stale checks bled into the next batch; fixed by scoping the `.grade-pick` read to the controls host AND clearing all checks after each grade run. (2) **release-mode reset on re-grade** — a fresh AI pass reseeded `releaseMode:'full'`; fixed by preserving the prior mode. (3) Added a **stale-render guard** in the async overlay (bail if the user advanced/closed during the `art_read` await). **Lesson for future Claude (now a Dragon):** scope DOM selectors to a container, never the whole document, in a multi-render UI; clear transient input state after batch actions; guard async renders against the user moving mid-await. Diagnosed via console probes (`_gradeBatch`/`_gradeIdx` vs. what's checked) rather than guessing. |
 | June 29 | **Reopen-to-edit saved grades (v4.9.2).** A **view / edit** link on any already-graded student (detected via `grade_list`, so it shows even for grades from a prior session) reopens the latest saved confirmed version into the editable overlay — **no AI call, no fresh draft** (loads your saved tiers/comments). Edits + Confirm & save **append** the next version (append-on-save), release mode preserved across the round-trip. Closes the gap where the only way back into a confirmed grade was to re-grade (which burned a call and reverted to a fresh AI draft). CMS-only. Verified live: reopen shows the saved edits, tweak persists as a new version, release mode survives. |
+| June 30 | **Editor dashboard cards + stale-draft roll-off (v4.10) — two arcs, one session.** (1) **Editor dashboard cards (CMS-only):** the editor/adviser dashboard gained a **Review Queue ↔ My Assignments** tab toggle. Review Queue = the existing editing-duties view; My Assignments mirrors the reporter dashboard for the editor's OWN articles (editors write too). Built by extracting the reporter card logic into a shared `renderMyAssignmentsPanel(assignListElId, myListElId)` (called by `loadReporterDash` and the new `loadEditorMyAssignments`); `switchEditorDashTab` toggles panels; `showView` resets to queue on entry. Fixed `requestExtension`'s hardcoded `loadReporterDash` refresh → now role-aware. (2) **Stale-draft roll-off (SQL → Worker):** new `updated_at` column on `articles` (`ALTER TABLE` + backfill `= created_at`), stamped by `art_save` on every write; nightly sweep step 6 trashes `draft` rows untouched 45 days → Recycle Bin → existing 30-day purge (75 days total, restore window). Role-blind; `updated_at` clock protects actively-revised drafts. **New Dragon, exposed by this:** trashed articles were showing on the dashboard "My Submissions" list with a TRASHED badge instead of being hidden — latent for ages because drafts rarely got trashed; the roll-off surfaced it. Fixed with a `status !== 'trashed'` filter in `renderMyAssignmentsPanel` (lands on both reporter + editor views). Deploy: SQL (forgot it first pass — Save Draft threw "Save failed" until the column existed; clean reminder that SQL precedes Worker), then Worker, then CMS. Verified live end-to-end: backdated a test draft to `updated_at` − 46 days, sweep filter caught it, it trashed → vanished from Fable's dashboard → sat restorable in the adviser's Recycle Bin. Editor dashboard cards item crossed off; only the cosmetic favicon 404 remains on the backlog. |
 
 ---
 
-*Updated June 29, 2026 — v4.9, the rubric-grading ARC is complete end to end:
-engine (v4.7) → storage (v4.8) → scorecard UI + student feedback with release
-modes + history viewer (v4.9) → batch-stepping fixes (v4.9.1) → reopen-to-edit
-saved grades (v4.9.2). The whole AI surface is adviser-only; students see only the
-released parts of a confirmed grade in-CMS; Canvas stays the hand-keyed grade of
-record. Next up: editor assignment dashboard cards (editors write too), then
-platform polish. The Noah Kahan streak finally died — Laura saw him June 11
-(and Gigi Perez June 14). Both excellent.*
+*Updated June 30, 2026 — v4.10. Two arcs this session: (1) **editor dashboard
+cards** — editors finally get a Review Queue ↔ My Assignments tab toggle, with My
+Assignments mirroring the reporter dashboard for their own articles (shared
+`renderMyAssignmentsPanel`); (2) **stale-draft roll-off** — a new `updated_at`
+last-touch clock + nightly sweep step 6 sends drafts untouched 45 days to the
+Recycle Bin (75-day total lifespan, role-blind), so the inevitable pile of
+learning-the-page "dgdkjg" drafts clears itself. New Dragon logged: trashed
+articles must be filtered out of dashboard lists (the roll-off exposed a latent
+miss). The rubric-grading arc remains complete; the AI surface is adviser-only;
+Canvas stays the hand-keyed grade of record. The backlog is down to a single
+cosmetic item — the favicon 404. Next up: whatever Laura points at.*
 
 <!-- prior footer note (v4.7) retained below for history -->
 *v4.7 — rubric-grading ENGINE shipped and verified live
