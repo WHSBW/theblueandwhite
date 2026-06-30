@@ -2551,7 +2551,8 @@ let _gradeListCache = null; // latest-version-per-article map for CSV (from grad
 
 // Called by runReport after it stores _reportRows: stash gradable article meta
 // and (re)render the grading controls + checkboxes.
-function gradeSyncFromReport(matchedArticles){
+let _gradeSavedSet = {};   // article_id -> latest saved grade row (for the View/edit link)
+async function gradeSyncFromReport(matchedArticles){
   _gradeArticles = {};
   (matchedArticles||[]).forEach(a=>{
     if (GRADABLE_STATUSES.includes(a.status)){
@@ -2563,6 +2564,15 @@ function gradeSyncFromReport(matchedArticles){
       };
     }
   });
+  // Which of these already have a SAVED grade? (adviser-only grade_list, latest per article)
+  _gradeSavedSet = {};
+  try {
+    const r = await workerCall({ action:'grade_list' });
+    (r.rows||[]).forEach(g=>{
+      const k = String(g.article_id);
+      if (!_gradeSavedSet[k] || (g.version||0) > (_gradeSavedSet[k].version||0)) _gradeSavedSet[k] = g;
+    });
+  } catch(e){ _gradeSavedSet = {}; }
   gradeRenderControls();
 }
 
@@ -2579,11 +2589,13 @@ function gradeRenderControls(){
   ids.sort((a,b)=> _gradeArticles[a].name.localeCompare(_gradeArticles[b].name));
   ids.forEach(id=>{
     const a = _gradeArticles[id];
-    const done = _gradeDrafts[id] && _gradeDrafts[id].confirmed;
+    const saved = _gradeSavedSet[String(id)];
+    const done = (_gradeDrafts[id] && _gradeDrafts[id].confirmed) || !!saved;
     h += '<label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer;">'+
       '<input type="checkbox" class="grade-pick" value="'+_attr(id)+'">'+
       escHtml(a.name)+' <span style="color:#aaa;">('+escHtml(a.status)+')</span>'+
       (done ? ' <span style="color:#1a7f37;font-weight:600;">✓ graded</span>' : '')+
+      (saved ? ' <a href="#" onclick="gradeOpenSaved(\''+_attr(id)+'\');return false;" style="font-size:12px;color:var(--navy);text-decoration:underline;">view / edit</a>' : '')+
       '</label>';
   });
   h += '</div>';
@@ -2647,6 +2659,42 @@ async function gradeRunSelected(){
 }
 
 // ── The side-by-side overlay ──
+// Reopen a SAVED confirmed grade for editing — no AI call, no new draft from scratch.
+// Loads the latest confirmed version into the editable overlay; Confirm & save
+// appends the next version (append-on-save).
+async function gradeOpenSaved(id){
+  id = String(id);
+  const statusEl = document.getElementById('grade-run-status');
+  let rows = [];
+  try { const r = await workerCall({ action:'grade_list', article_id: id }); rows = r.rows || []; }
+  catch(e){ if (statusEl) statusEl.textContent = 'Could not load saved grade: ' + escHtml(e.message); return; }
+  if (!rows.length){ if (statusEl) statusEl.textContent = 'No saved grade found.'; return; }
+  // latest version
+  const g = rows.reduce((a,b)=> ((b.version||0) > (a.version||0) ? b : a), rows[0]);
+  const cg = g.confirmed_grade || {};
+
+  const working = {};
+  GRADE_CRIT.forEach(c=>{
+    const cc = cg[c.key] || {};
+    working[c.key] = { tier: cc.tier || 'developing', justification: cc.justification || '' };
+  });
+  working.overall = cg.overall || '';
+
+  // Reconstruct a draft. ai = the saved AI draft (for the injection banner + "AI suggested"),
+  // working = the SAVED confirmed tiers (your edits), releaseMode = how it was last released.
+  _gradeDrafts[id] = {
+    type: g.article_type || (_gradeArticles[id] && _gradeArticles[id].type) || 'news',
+    ai: (g.ai_draft && typeof g.ai_draft === 'object') ? g.ai_draft : { criteria:{}, injection_flag:false },
+    working: working,
+    confirmed: false,                       // reopened for editing
+    releaseMode: ['full','rubric','comments'].includes(cg.release_mode) ? cg.release_mode : 'full',
+    reopened: true,                         // marker: this came from storage, not a fresh AI pass
+  };
+  _gradeBatch = [id];
+  _gradeIdx = 0;
+  gradeOpenOverlay(0);
+}
+
 function gradeOpenOverlay(idx){
   if (!_gradeBatch.length) return;
   _gradeIdx = Math.max(0, Math.min(idx, _gradeBatch.length-1));
@@ -2816,6 +2864,8 @@ async function gradeConfirmSave(){
   }
   draft.confirmed = true;
   _gradeListCache = null; // CSV must re-pull
+  // reflect the new save locally so the View/edit link appears without a full reload
+  _gradeSavedSet[String(id)] = { article_id:String(id), version:(res.version||0), confirmed_total:(res.confirmed_total), confirmed_grade: Object.assign({}, draft.working, { release_mode: draft.releaseMode||'full' }), ai_draft: draft.ai, article_type: draft.type };
   // Auto-advance to the next unconfirmed article in the batch.
   let next = -1;
   for (let i=_gradeIdx+1; i<_gradeBatch.length; i++){ if (!_gradeDrafts[_gradeBatch[i]].confirmed){ next=i; break; } }
