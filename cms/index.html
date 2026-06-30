@@ -378,15 +378,29 @@
 
         <!-- EDITOR/ADVISER: DASHBOARD -->
         <div id="view-edash" class="view">
-          <div class="stat-row">
-            <div class="stat-card"><div class="stat-num" id="stat-pending">—</div><div class="stat-label">Pending Review</div></div>
-            <div class="stat-card"><div class="stat-num" id="stat-published">—</div><div class="stat-label">Published</div></div>
-            <div class="stat-card"><div class="stat-num" id="stat-drafts">—</div><div class="stat-label">Drafts</div></div>
-            <div class="stat-card"><div class="stat-num" id="stat-returned">—</div><div class="stat-label">Returned</div></div>
+          <div class="dash-tabs" id="edash-tabs" style="display:flex;gap:8px;margin-bottom:18px;">
+            <button class="btn btn-sm btn-primary" id="edash-tab-queue" onclick="switchEditorDashTab('queue')">Review Queue</button>
+            <button class="btn btn-sm" id="edash-tab-mine" onclick="switchEditorDashTab('mine')">My Assignments</button>
           </div>
-          <div id="ext-inbox" class="ext-inbox"></div>
-          <div class="section-div">Pending Review</div>
-          <div id="editor-queue"><div class="loading">Loading queue...</div></div>
+
+          <div id="edash-panel-queue">
+            <div class="stat-row">
+              <div class="stat-card"><div class="stat-num" id="stat-pending">—</div><div class="stat-label">Pending Review</div></div>
+              <div class="stat-card"><div class="stat-num" id="stat-published">—</div><div class="stat-label">Published</div></div>
+              <div class="stat-card"><div class="stat-num" id="stat-drafts">—</div><div class="stat-label">Drafts</div></div>
+              <div class="stat-card"><div class="stat-num" id="stat-returned">—</div><div class="stat-label">Returned</div></div>
+            </div>
+            <div id="ext-inbox" class="ext-inbox"></div>
+            <div class="section-div">Pending Review</div>
+            <div id="editor-queue"><div class="loading">Loading queue...</div></div>
+          </div>
+
+          <div id="edash-panel-mine" style="display:none;">
+            <div class="section-div">My Assignments</div>
+            <div id="e-assignments-list"><div class="loading">Loading assignments...</div></div>
+            <div class="section-div" style="margin-top:24px;">My Submissions</div>
+            <div id="e-my-articles-list"><div class="loading">Loading articles...</div></div>
+          </div>
         </div>
 
         <!-- EDITOR: REVIEW -->
@@ -920,7 +934,7 @@ function showView(id) {
   }
   // Load data for each view
   if (id === 'rdash') loadReporterDash();
-  if (id === 'edash') loadEditorDash();
+  if (id === 'edash') { switchEditorDashTab('queue'); loadEditorDash(); }
   if (id === 'articles') loadAllArticles();
   if (id === 'trash') loadTrash();
   if (id === 'analytics') loadAnalytics();
@@ -932,7 +946,11 @@ function showView(id) {
 
 // ── REPORTER DASHBOARD ────────────────────────────────────────────────────────
 
-async function loadReporterDash() {
+// Shared renderer: "my assignments + my submissions" — used by the reporter
+// dashboard AND the editor's "My Assignments" tab (editors write too, and get
+// the exact same card logic/states for their own articles). Parameterized by
+// element ids so the two views don't fight over the same DOM nodes.
+async function renderMyAssignmentsPanel(assignListElId, myListElId) {
   // Load my articles first so assignment cards can show progress
   const articles = await artRead({ where: { author_id_self: true }, order: 'created_at', dir: 'desc' });
 
@@ -944,7 +962,7 @@ async function loadReporterDash() {
   } catch(e) { console.error('assignments load failed:', e.message); }
   assignmentsCache = assignments;
   const extMap = await getExtensionMap();
-  const aList = document.getElementById('assignments-list');
+  const aList = document.getElementById(assignListElId);
   if (!assignments || assignments.length === 0) {
     aList.innerHTML = '<div class="empty">No assignments right now.</div>';
   } else {
@@ -983,7 +1001,7 @@ async function loadReporterDash() {
       </div>`;
     }).join('');
   }
-  const mList = document.getElementById('my-articles-list');
+  const mList = document.getElementById(myListElId);
   const dueMap = {};
   (assignments||[]).forEach(a => { if (a.due_date) dueMap[a.id] = a.due_date; });
   if (!articles || articles.length === 0) {
@@ -1000,6 +1018,27 @@ async function loadReporterDash() {
         ${a.status === 'returned' ? '<span style="font-size:11px;color:var(--danger);margin-left:6px;">Editor left notes</span>' : ''}
       </div>`).join('');
   }
+}
+
+async function loadReporterDash() {
+  return renderMyAssignmentsPanel('assignments-list', 'my-articles-list');
+}
+
+// Editor's "My Assignments" tab — same cards/states as the reporter dashboard,
+// scoped to the editor's own authored articles. Lazy-loaded on tab click.
+async function loadEditorMyAssignments() {
+  return renderMyAssignmentsPanel('e-assignments-list', 'e-my-articles-list');
+}
+
+// Toggle between the editor's Review Queue (their editing duties) and My
+// Assignments (their own reporting duties) — editors are both.
+function switchEditorDashTab(tab) {
+  const isQueue = tab === 'queue';
+  document.getElementById('edash-panel-queue').style.display = isQueue ? '' : 'none';
+  document.getElementById('edash-panel-mine').style.display = isQueue ? 'none' : '';
+  document.getElementById('edash-tab-queue').classList.toggle('btn-primary', isQueue);
+  document.getElementById('edash-tab-mine').classList.toggle('btn-primary', !isQueue);
+  if (!isQueue) loadEditorMyAssignments();
 }
 
 // ── WRITE / EDIT ──────────────────────────────────────────────────────────────
@@ -1238,7 +1277,9 @@ async function requestExtension(id){
   try{
     await workerCall({ action:'ext_request', id: target, reason: reason.trim() });
     alert("Your request was sent to Ms. Novello. You'll see her answer on your dashboard.");
-    if(currentArticleId === target) loadArticleForEdit(target); else loadReporterDash();
+    if(currentArticleId === target) loadArticleForEdit(target);
+    else if (currentUser.role === 'reporter') loadReporterDash();
+    else loadEditorMyAssignments(); // editor's own-article card lives on the My Assignments tab
   }catch(e){ alert('Could not send request: ' + e.message); }
 }
 
