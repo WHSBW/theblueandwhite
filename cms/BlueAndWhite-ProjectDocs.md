@@ -2,7 +2,43 @@
 **Paul R. Wharton High School Student Newspaper**
 *For Laura Novello (adviser) and future Claude instances picking up this project*
 
-> **Version note (June 29, 2026):** This is the **v4.7** doc. v4.7 added the
+> **Version note (June 29, 2026):** This is the **v4.9** doc. v4.9 completed the
+> **rubric-grading arc** — it turned the v4.7 engine into a full, usable loop and
+> closed the question v4.7/v4.8 left open ("what does the student ever see?").
+> Three things landed: (1) **storage** — a new private `rubric_grades` table; the
+> adviser-confirmed scorecard is now saved, **append-on-save** so every confirm is
+> a new version (full regrade history; latest row = the grade); 30-day roll-off
+> keyed to **confirmation**, not publish. (2) **The scorecard UI** — a Canvas-style
+> side-by-side in the Reports view: pick an assignment, tick gradable articles
+> (pending/returned/published only), **Grade selected** runs the AI batch, then a
+> two-pane overlay (article left, editable scorecard right — tier dropdowns +
+> live-computed points + editable justifications + overall + the ⚑ injection
+> banner + running total). **Confirm & save** is the ONLY path to a stored grade;
+> it auto-advances through the batch. An adviser-only **history strip** shows prior
+> versions (read-only), and a **view / edit** link reopens any saved grade for
+> further tweaking **with no new AI call** (loads your saved tiers/comments, not a
+> fresh draft; Confirm appends the next version). (3) **Student feedback** — after
+> the adviser confirms, the writer sees their rubric feedback in their own CMS
+> write view (same real estate as editor notes), filtered by a per-version
+> **release mode**: `full` (rubric + comments), `rubric` (tiers/points/total, no
+> comments), or `comments` (feedback only, **no score shown** — the practice-round
+> mode). Every student view carries the italic line *"Final grade of record
+> resides in the HCPS Canvas gradebook."* **Canvas stays the grade of record (the
+> adviser hand-keys the number — district contract); the CMS is the "why."** The
+> **entire API-grading surface is adviser-only** (trigger, view, save, student
+> feedback is reporter-own-scoped server-side) — no student editor can run a draft,
+> see a grade, or read another student's feedback. Privacy/SQL posture: the
+> `rubric_grades` table is RLS-on-at-creation, no anon policy; `release_mode` rides
+> inside the existing `confirmed_grade` jsonb so storage needed **one CREATE TABLE
+> and zero migrations**. Verified live across the full gauntlet (release-mode
+> filtering, reporter/editor lockout, injection flag, history, reopen-to-edit).
+> See Build History for the v4.8 → v4.9.2 sub-steps and their hard-won bug
+> lessons. **Still open (NOT done):** editors don't yet get assignment dashboard
+> cards / deadline cues like reporters do (they write too) — own sprint; and a
+> harmless `favicon.ico` 404 in console (cosmetic). Laura's corrections are
+> authoritative.
+>
+> **Version note (June 29, 2026):** This was the **v4.7** doc. v4.7 added the
 > **rubric-grading ENGINE** — one Worker action `rubric_grade` (editor/adviser
 > only) that calls Claude for an **AI second-opinion draft** the adviser
 > confirms; it is **never autonomous.** The model picks one of five tiers per
@@ -63,9 +99,9 @@
 | Hosting | GitHub Pages (free, public repo) |
 | Domain registrar | Namecheap (CNAME points to GitHub Pages) |
 | Backend database | Supabase (project ID: `cybjclqcdmrjhoaoiund`) |
-| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.7** |
+| Auth gateway + publish proxy | Cloudflare Worker (`morning-field-8e58.lauranovello0214.workers.dev`) — **v4.9** |
 | File storage | Supabase Storage — private bucket `proofs` (interview proofs; signed-URL only) **and** PUBLIC bucket `media` (article lead photos + staff headshots; public-read, Worker-only writes) |
-| AI grading | Anthropic API (`claude-sonnet-4-6`), called from the Worker via the `ANTHROPIC_KEY` secret. Second opinion only; adviser confirms. |
+| AI grading | Anthropic API (`claude-sonnet-4-6`), called from the Worker via the `ANTHROPIC_KEY` secret. **Adviser-only**, second opinion only; adviser confirms. Confirmed scores stored in `rubric_grades` (append/history); students see released feedback in-CMS; **Canvas is the grade of record (hand-keyed)** |
 | CMS URL | https://blueandwhitewhs.com/cms/ |
 | Late policy config | `assets/js/late-policy-settings.js` (10% / school day) |
 | Deployment | Local OneDrive git clone → GitHub Desktop commit/push; Pages builds in ~1 min, CDN up to ~10 min |
@@ -81,11 +117,12 @@ Reporter/Editor (browser)
         │  login → Worker checks credentials, issues 12-hour session token
         │  EVERY data operation: POST {action, token, ...}
         ▼
-Cloudflare Worker  ◄── secrets: GITHUB_TOKEN, SUPABASE_SERVICE_KEY, ANTHROPIC_KEY
+Cloudflare Worker (v4.9)  ◄── secrets: GITHUB_TOKEN, SUPABASE_SERVICE_KEY, ANTHROPIC_KEY
    │         │      ◄── Cron Trigger 0 9 * * * (nightly sweep, 4–5 AM Tampa)
    │         └── Supabase REST (service role) — ALL reads & writes for the CMS
    │  PUT/DELETE files via GitHub Contents API
-   │  POST api.anthropic.com — rubric grading draft (v4.7, adviser-triggered)
+   │  POST api.anthropic.com — rubric grading draft (v4.7, adviser-only)
+   │  confirmed grades stored in Supabase rubric_grades (v4.8/4.9, append)
    ▼
 GitHub repo → GitHub Pages → blueandwhitewhs.com
         ▲
@@ -99,12 +136,17 @@ verified session token. The public key can read published articles and nothing
 else — no drafts, no notes, no extensions, no edit-locks, no writes. All
 site-file changes are authenticated and version-controlled in git.
 
-**On the AI grader (v4.7):** the only data that leaves the platform is the
+**On the AI grader (v4.7–v4.9):** the only data that leaves the platform is the
 rubric + an article's **anonymous** plain text + its type ("news"/"editorial").
 No student name, no student number, no metadata — the Worker re-attaches
-identity locally for the gradebook. The API key lives only as a Worker secret,
-never in the browser. Grading is **manual and adviser-triggered**, never
-automatic.
+identity locally. The API key lives only as a Worker secret, never in the
+browser. Grading is **manual and adviser-only** (v4.9 tightened the whole
+surface — trigger/view/save — to adviser), never automatic. v4.9 added grade
+STORAGE (the confirmed scorecard is saved to `rubric_grades`, append-on-save for
+history) and STUDENT FEEDBACK (the writer sees the released parts of their latest
+confirmed grade in-CMS). **Canvas remains the grade of record — the adviser
+hand-keys the number per district contract; the CMS hosts the "why" (rubric +
+comments).** Nothing on the platform talks to Canvas.
 
 ---
 
@@ -122,7 +164,8 @@ automatic.
 | proofs table | RLS enabled, **no anon policies** — Worker-only. Interview-proof file pointers (path + filename + uploader); FK to articles ON DELETE CASCADE |
 | proofs Storage bucket | **PRIVATE** (no public policy). Files reachable only via short-lived (5-min) Worker-signed view URLs; never linked publicly. Protects egress + student privacy |
 | media Storage bucket (v4.6) | **PUBLIC-read** (anyone can GET) — these images appear on the live site. **No anon writes**: the Worker (service role) is the only writer. Deliberate, documented departure from the proofs privacy model — do NOT lock this bucket or every site photo breaks. Holds article lead photos + staff headshots only; no student-private data |
-| AI grading payload (v4.7) | Only rubric + **anonymous** article text + type leave the Worker. No name/number/metadata. Adviser-triggered only; nothing saved by the action |
+| AI grading payload (v4.7) | Only rubric + **anonymous** article text + type leave the Worker. No name/number/metadata. **Adviser-only** (v4.9); the draft action itself saves nothing |
+| rubric_grades table (v4.8/4.9) | RLS enabled, **no anon policies** — Worker-only. Holds confirmed grades + AI/adviser justifications + release mode = **sensitive student data**. RLS-on-at-creation (no exposed window). Reads gated: `grade_list` adviser-only; `grade_feedback` reporter-own-scoped and returns ONLY the released parts of the latest confirmed version (never the AI draft, never an unreleased number, never history) |
 | Sessions | 12-hour expiry, purged nightly, killed instantly on staff removal |
 | Reporter isolation | Server-enforced: reporters can only read/write their OWN articles |
 | Note content | HTML-escaped on render (student-editor XSS closed) |
@@ -153,11 +196,14 @@ until they do. New accounts (`staff_add`) and password changes
 - **Reporter:** own articles only (write/edit/autosave/submit), see applicable
   assignments + own progress, request extensions, change own password.
 - **Editor:** + read everything, review queue, publish/return/archive/recycle/
-  restore/delete-forever, analytics, create/edit/delete assignments, **run AI
-  rubric grading** (`rubric_grade`).
+  restore/delete-forever, analytics, create/edit/delete assignments. **(v4.9: AI
+  rubric grading is NO LONGER editor-accessible — adviser-only.)**
 - **Adviser:** + Staff Manager, staff page publishing, add/remove logins;
-  grant/deny extensions; unremovable via API. **Confirms every AI grade before
-  it counts (the only path to a stored score — UI pending).**
+  grant/deny extensions; unremovable via API. **Owns the ENTIRE AI-grading
+  surface (adviser-only): run drafts (`rubric_grade`), confirm/save
+  (`grade_save` — the only path to a stored score), view grades + history
+  (`grade_list`), set per-version release mode. Students see released feedback
+  via `grade_feedback` (own-scoped).**
 
 ---
 
@@ -212,9 +258,30 @@ bucket `proofs`; this table only holds pointers. Multiple proofs per article.
 
 ### (no new tables in v4.7)
 `rubric_grade` **saves nothing** — it only returns a draft scorecard to the
-browser. Grade storage arrives with the scorecard UI sprint (planned: store
-both the AI draft and the adviser-confirmed score, with a 30-day roll-off, in
-the CSV/report layer — same pattern as proofs roll-off).
+browser. (Storage arrived in v4.8/4.9 — see `rubric_grades` below.)
+
+### rubric_grades (v4.8/4.9, verified against Worker)
+**One row per CONFIRMED grade — append-on-save, so this is a full version
+history.** The latest `version` for an article IS the grade; older rows are the
+audit/improvement trail (the history strip + reopen-to-edit read them). Columns:
+`id` (uuid PK, `gen_random_uuid()`) · `article_id` (uuid, **FK → articles(id) ON
+DELETE CASCADE**) · `version` (int, 1,2,3… per article; the Worker stamps the
+next number) · `article_type` (`news`/`editorial` — what it was graded as) ·
+`ai_draft` (jsonb — the model's ORIGINAL draft: tiers + justifications + overall
++ injection_flag + its computed total, for the audit trail) · `ai_total`
+(numeric) · `ai_injection_flag` (boolean, broken out for easy "show flagged") ·
+`confirmed_grade` (jsonb — the adviser-edited tiers + justifications + overall,
+**plus `release_mode`** = `full`/`rubric`/`comments`, tucked in the JSON so no
+extra column was needed) · `confirmed_total` (numeric — **Worker-RECOMPUTED**
+from the confirmed tiers at save; never trusts a browser number) · `confirmed_by`
+(adviser name) · `confirmed_at` (timestamptz). Indexes on `article_id` and
+`confirmed_at`. **Private — RLS ON at creation, NO anon policies** (holds grades
++ justifications = sensitive). Per-criterion *points* are NOT stored — only the
+tier — and points are derived from the shared `RUBRIC_POINTS` table wherever
+needed (CSV, student view), so the tier is the single source of truth and there
+is zero drift. Roll-off: the nightly sweep deletes rows older than 30 days
+**measured from `confirmed_at`** (not publish — a returned-but-graded article
+keeps its grade through the revision cycle).
 
 ### Cumulative SQL (v4 baseline + v4.3 additions)
 ```sql
@@ -249,18 +316,39 @@ ALTER TABLE assignments ENABLE ROW LEVEL SECURITY;
 -- editor_notes 'done'/'done_by'/'done_at' live INSIDE the existing JSON array,
 --   so note checkboxes needed no schema change.
 
--- v4.7 (rubric grading): NO SQL. The action saves nothing; it only returns a
---   draft scorecard to the browser. Storage (AI draft + confirmed score) comes
---   with the scorecard UI sprint.
+-- v4.7 (rubric grading ENGINE): NO SQL — the draft action saves nothing.
+
+-- v4.8 (rubric grade STORAGE): one new table, RLS on at creation, no anon policy.
+--   release_mode (v4.9) rides inside confirmed_grade jsonb — no migration needed.
+CREATE TABLE IF NOT EXISTS rubric_grades (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  article_id         uuid NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  version            int  NOT NULL DEFAULT 1,
+  article_type       text NOT NULL,
+  ai_draft           jsonb NOT NULL,
+  ai_total           numeric NOT NULL,
+  ai_injection_flag  boolean NOT NULL DEFAULT false,
+  confirmed_grade    jsonb NOT NULL,   -- includes release_mode (full/rubric/comments)
+  confirmed_total    numeric NOT NULL,
+  confirmed_by       text NOT NULL,
+  confirmed_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS rubric_grades_article_id_idx   ON rubric_grades(article_id);
+CREATE INDEX IF NOT EXISTS rubric_grades_confirmed_at_idx ON rubric_grades(confirmed_at);
+ALTER TABLE rubric_grades ENABLE ROW LEVEL SECURITY;
+-- NO anon policy by design (Worker service role bypasses RLS).
+-- Emergency rollback: ALTER TABLE rubric_grades DISABLE ROW LEVEL SECURITY;
+
+-- v4.9 (student feedback + reopen-edit): NO SQL — all Worker code + CMS.
 
 -- Emergency rollback pattern: ALTER TABLE <t> DISABLE ROW LEVEL SECURITY;
 ```
 
 ---
 
-## Cloudflare Worker (v4.7)
+## Cloudflare Worker (v4.9)
 
-Secrets (type Secret): `GITHUB_TOKEN`, `SUPABASE_SERVICE_KEY`, **`ANTHROPIC_KEY`** (v4.7).
+Secrets (type Secret): `GITHUB_TOKEN`, `SUPABASE_SERVICE_KEY`, **`ANTHROPIC_KEY`** (v4.7). (v4.8/4.9 added no new secrets.)
 Cron: `0 9 * * *` → nightly sweep.
 
 ### ⚠️ Token expiry — ACTION REQUIRED by June 1, 2027
@@ -294,7 +382,10 @@ Don't investigate dead tokens; re-mint.
 | proof_view_url | any (reporter own-scoped) | mints a 5-minute signed view URL for one proof |
 | proof_delete | any (reporter own; editors/adviser any) | deletes the Storage file + the `proofs` row |
 | image_upload (v4.6) | any (reporter own article; staff target = adviser only) | stores a pre-cropped JPEG (base64) in the PUBLIC `media` bucket at a stable, extension-less path (`articles/<id>-lead` or `staff/<id>`), then stamps `photo_url` on the row via `sbPatchRow`. Returns the public URL + `?v=` cache-buster. Upsert = replace-in-place, no orphans. Validates JPG/PNG/WEBP + 8 MB cap |
-| **rubric_grade (v4.7)** | **editor+** | **AI rubric draft — a SECOND OPINION the adviser confirms, never autonomous. Accepts a LIST of article ids (`ids`) — the checkbox batch; a single grade is a one-element list (also accepts a bare `id`). Per article: strips HTML to paragraph-preserving plain text, refuses if < 50 words, reads type from `section` (Editorial → editorial, all else → news), calls Claude (`claude-sonnet-4-6`) with the cached rubric system prompt, validates the JSON, maps tier → points from a fixed table (Worker does ALL arithmetic), bounded retry (2 attempts then flag). Returns per-article `{id, ok, type, grade}` or `{id, ok:false, error}`. SAVES NOTHING — only returns the draft scorecard. Needs the `ANTHROPIC_KEY` secret.** |
+| **rubric_grade (v4.7; adviser-only as of v4.9)** | **adviser** | **AI rubric draft — a SECOND OPINION the adviser confirms, never autonomous. Accepts a LIST of article ids (`ids`) — the checkbox batch; a single grade is a one-element list (also accepts a bare `id`). Per article: strips HTML to paragraph-preserving plain text, refuses if < 50 words, reads type from `section` (Editorial → editorial, all else → news), calls Claude (`claude-sonnet-4-6`) with the cached rubric system prompt, validates the JSON, maps tier → points from a fixed table (Worker does ALL arithmetic), bounded retry (2 attempts then flag). Returns per-article `{id, ok, type, grade}` or `{id, ok:false, error}`. SAVES NOTHING — only returns the draft scorecard. Needs the `ANTHROPIC_KEY` secret. **v4.9: role tightened from editor+ to adviser-only — no student editor can send article text off-platform.** |
+| **grade_save (v4.8)** | **adviser** | The ONLY path to a stored grade. Validates the confirmed tiers, **RECOMPUTES `confirmed_total` from them** (never trusts a browser number), stamps the next `version`, and **APPENDS** a row to `rubric_grades`. Stores both the AI draft (audit) and the adviser-confirmed grade incl. `release_mode`. Returns `{id, version, confirmed_total}` |
+| **grade_list (v4.8)** | **adviser** | Read confirmed grades. With `article_id`: that article's full version history (oldest first) — powers the history strip, reopen-to-edit, and the CSV grade columns. Without: every row (CMS reduces to latest-per-article). Adviser-only — no student ever sees a grade through this |
+| **grade_feedback (v4.9)** | any (reporter own-scoped) | The STUDENT read path. Returns ONLY the **latest confirmed version**, filtered by its `release_mode` — never the AI draft, never an unreleased number, never history. Reporters are server-scoped to their OWN article (others → null). `rubric` mode nulls the justifications/overall; `comments` mode nulls the tiers/points/total |
 
 **Note-done toggle:** dedicated `note_toggle` action (tagged v4.1 in the Worker).
 It flips `done`/`done_by`/`done_at` on one note inside the editor_notes JSON
@@ -354,6 +445,30 @@ anything** — Laura investigates and decides. Verified live (see Build History)
 the same planted injection scored 100 on a strong article and 40 on a weak one —
 proving the embedded instruction moved the score by exactly zero.
 
+### Rubric grade storage + student feedback (v4.8/4.9) — how it is built
+**Storage (v4.8).** `grade_save` (adviser-only) is the one writer. It validates
+the six confirmed tiers, **recomputes the total from them via `RUBRIC_POINTS`**
+(the same hardcoded table the engine uses — never trusts a browser number),
+finds the next `version` for that article, and inserts a new `rubric_grades`
+row (append = history). `release_mode` (v4.9) is stored inside `confirmed_grade`
+jsonb. `grade_list` (adviser-only) reads rows — with an `article_id` it returns
+that article's full version history (powers the history strip, reopen-to-edit,
+and the CSV); without, it returns all rows.
+
+**Student feedback (v4.9).** `grade_feedback` is the reporter-safe read. It is
+own-scoped server-side (a reporter passing someone else's id gets `null`), pulls
+ONLY the latest confirmed version, and filters by `release_mode` before
+returning: `rubric` nulls justifications + overall; `comments` nulls tiers +
+points + total; `full` returns everything. It NEVER returns the AI draft, an
+unreleased number, or history. The student sees this in their own write view,
+under the workflow tracker, with the Canvas grade-of-record italic line.
+
+**Reopen-to-edit (v4.9).** No new Worker action — the CMS reads the latest
+confirmed version via `grade_list?article_id=` and seeds the editable overlay
+from the SAVED tiers/comments (not a fresh AI pass, no API call). Confirm & save
+appends the next version (append-on-save). Release mode is preserved across the
+round-trip and across re-grades.
+
 ### Nightly sweep
 1. Auto-takedowns (published + takedown_at passed → GitHub file removed →
    archived; GitHub failure = retry tomorrow)
@@ -364,6 +479,10 @@ proving the embedded instruction moved the score by exactly zero.
 4. **Proof roll-off (v4.5):** delete proofs whose article `published_at` is more
    than `PROOF_ROLLOFF_DAYS` (30) ago — "published + 30 days," plus the trash
    backstop in step 2.
+5. **Rubric-grade roll-off (v4.8):** delete `rubric_grades` rows older than
+   `GRADE_ROLLOFF_DAYS` (30) measured from **`confirmed_at`** (not publish — a
+   returned-but-graded article keeps its grade through revisions). District-IT
+   hygiene; the adviser exports to CSV well inside the window.
 
 ---
 
@@ -420,15 +539,39 @@ sessionStorage (`bw_session`).
   16:9 `object-fit:cover` — article heroes now centre-crop uniformly with the
   homepage (existing articles need a re-publish to pick it up; new ones are
   automatic). All CMS-only — no Worker/SQL/RLS touched beyond the bucket.
-- **AI rubric grading (v4.7 — ENGINE only; UI pending):** the `rubric_grade`
-  Worker action is live and verified, but **there is no CMS UI yet** — it has
-  only been exercised via the browser console. The next sprint builds the
-  **scorecard UI** in the review pane (see Backlog): a checkbox list of submitted
-  articles → "Grade selected" → six editable rows (tier dropdown + computed
-  points + editable justification) + overall comment + ⚑ flag + running total,
-  with a **"Confirm & save"** button that is the *only* path to a stored grade.
-  This is the Red Pen Novello principle in code: the model proposes, the adviser
-  edits and confirms, nothing un-reviewed reaches a student.
+- **AI rubric grading (v4.7 engine + v4.8/4.9 UI — SHIPPED, adviser-only):**
+  lives in the **Reports view**. Pick an assignment → the report table renders →
+  below it an **AI Rubric Grading** panel lists the gradable articles
+  (pending/returned/published only; drafts/trashed never appear) with a checkbox
+  each. Tick the ready ones → **⚖ Grade selected** fires `rubric_grade` (one
+  AI call per article, sequential) → a **Canvas-style side-by-side overlay** opens:
+  the article (read-only) on the LEFT, the editable scorecard on the RIGHT — six
+  rows (tier dropdown showing each tier's points + live-computed points + editable
+  justification), an editable overall comment, the **⚑ injection banner** if the
+  model flagged the text, a **Release-to-student** selector (full / rubric only /
+  comments only), and a running total. **Confirm & save** (`grade_save`) is the
+  ONLY path to a stored grade and **auto-advances** to the next ungraded article
+  in the batch. An adviser-only **history strip** at the top of the overlay lists
+  prior saved versions (read-only snapshots). Any already-graded student shows a
+  **view / edit** link that **reopens the latest saved grade with no AI call**
+  (loads your saved tiers/comments, fully editable; Confirm appends the next
+  version). Red Pen Novello in code: the model proposes, the adviser edits and
+  confirms, nothing un-reviewed reaches a student — and **no student editor can
+  touch any of it** (the whole surface is adviser-only). Key functions:
+  `gradeSyncFromReport`, `gradeRenderControls`, `gradeRunSelected`,
+  `gradeOpenOverlay`/`gradeRenderOverlay`, `gradeSetTier/Just/Overall/Mode`,
+  `gradeConfirmSave`, `gradeRenderHistory`/`gradeShowVersion`, `gradeOpenSaved`,
+  `loadGradeFeedback` (student side), `_loadGradeMap`/`downloadReportCSVWithGrades`
+  (CSV).
+- **Student rubric feedback (v4.9):** in the reporter's WRITE view, under the
+  workflow tracker, a **"Your Rubric Feedback"** panel appears once the adviser
+  confirms — showing only the released parts of the latest confirmed version
+  (`grade_feedback`, reporter-own-scoped). `full` = tiers + points + total +
+  comments; `rubric` = tiers/points/total, no prose; `comments` = feedback only,
+  **no score shown** (the practice-round mode — comment now, grade when they say
+  they're ready). Always carries the italic line *"Final grade of record resides
+  in the HCPS Canvas gradebook."* Never shows the AI draft, an unreleased number,
+  or history.
 - **Assignments:** adviser/editor creates AND EDITS (✎ Edit fills the form,
   Save Changes / Cancel Edit). **Smart reporter dashboard cards** show per-kid
   progress on each assignment — Write (none yet) / Open + "Draft in progress" /
@@ -457,8 +600,12 @@ sessionStorage (`bw_session`).
   **v4.5:** an **Interview Proof** column (Yes/No) on-screen + in CSV, and a
   "N with proof" count in the summary line — fed by `proof_list` (no id) so the
   adviser can grade the interview component straight down the CSV into Canvas.
-  **(v4.7-planned:** AI total + 6 criteria + Confirmed? columns join this CSV
-  once the scorecard UI + storage land.)
+  **v4.8/4.9 (SHIPPED):** the CSV now also carries **AI Total, Confirmed Total,
+  Confirmed?**, and the six criteria points (derived from the saved tiers), pulled
+  via `grade_list` (latest version per article), name-sorted. The adviser opens
+  the CSV beside Canvas and hand-keys the numbers — the page never talks to Canvas
+  (district won't allow it). `downloadReportCSVWithGrades` loads grades first, then
+  `downloadReportCSV` builds the file.
 - **Review (4-step progress tracker, client-side):** the reporter sees a visual
   4-stage tracker driven by article status — **Rough Draft** (draft) → **Editor
   Review** (pending) → **Revisions** (returned) → **Published** (published) —
@@ -507,6 +654,16 @@ sessionStorage (`bw_session`).
   loss).
 - **Assistant prefill is unsupported on `claude-sonnet-4-6`** (v4.7) — see the
   Worker section. Removed; don't re-add without re-testing.
+- **Scope DOM selectors to a container in multi-render UIs** (v4.9.1) — the
+  grading overlay read `document.querySelectorAll('.grade-pick:checked')`
+  document-wide, and stale checkbox state seeded the wrong article into the batch
+  ("everyone opens the same student's article"). Fix: read within the controls
+  host (`host.querySelectorAll`), clear transient input state (checkboxes) after
+  batch actions, and guard async renders (bail if the user moved during an await).
+  Diagnose state bugs with a console probe of the actual state vars, not guesses.
+- **favicon.ico 404 in console** — cosmetic, harmless, ignorable. The page has no
+  favicon; the browser logs a 404 and moves on. Not a bug; don't chase it. (Could
+  add one for polish someday.)
 
 ---
 
@@ -573,23 +730,23 @@ sessionStorage (`bw_session`).
 
 ## Backlog / Next Sprint Arc
 
-**Next arc — rubric grading (engine DONE v4.7):**
-- `rubric_grade` Worker action is **live and verified** — AI second-opinion
-  draft, adviser confirms. **Still ahead, in order:**
-  1. **Scorecard UI** — the confirm-before-it-counts screen in the review pane:
-     a checkbox list of submitted articles → "Grade selected" → six editable
-     rows (tier dropdown + computed points + editable justification) + editable
-     overall comment + ⚑ injection flag + running total + **"Confirm & save."**
-     Retires the console testing; puts the red pen back in Novello's hand.
-  2. **Storage** — save BOTH the AI's original draft (audit trail) AND the
-     adviser-confirmed score (the real grade), with a 30-day roll-off (same
-     pattern as proofs). Keep a small re-grade history so improvement across
-     revisions is visible.
-  3. **CSV** — add AI total + 6 criteria + a Confirmed? column to the existing
-     Assignment Reports CSV, name-sorted, for straight import into Canvas.
-  4. **Full role-gauntlet** alongside the UI (Fable Jones own-scoping, editor
-     sees the grade button, adviser confirms; plus the mediocre-article
-     injection test).
+**Rubric grading arc — COMPLETE (v4.7 → v4.9.2):**
+- ~~Engine (`rubric_grade`)~~ **DONE v4.7.** ~~Storage (`rubric_grades`, append
+  history, roll-off)~~ **DONE v4.8.** ~~Scorecard UI (side-by-side, confirm &
+  save, history strip)~~ **DONE v4.9.** ~~Student feedback + release modes
+  (full/rubric/comments)~~ **DONE v4.9.** ~~CSV grade columns~~ **DONE v4.8/4.9.**
+  ~~Reopen-to-edit saved grades~~ **DONE v4.9.2.** ~~Full role gauntlet~~ **PASSED**
+  (Fable/reporter + Clawford/editor both locked out; injection keystone; release
+  filtering; reopen/history). Canvas stays grade-of-record (hand-keyed); CMS hosts
+  the "why."
+
+**Open items (NOT done — next up):**
+- **Editor assignment notifications / dashboard cards.** Editors write articles
+  and have the same assignment deadlines as reporters, but only the *reporter*
+  dashboard surfaces assignment cards + progress + deadline cues. Editors should
+  get their own-article assignment view too. Its own small sprint (CMS-side;
+  mirror the reporter dashboard's assignment-card logic for editor accounts).
+- **favicon.ico** — add one to kill the harmless console 404 (cosmetic polish).
 
 **Platform polish:**
 - ~~Photo/asset upload to Supabase Storage (replaces paste-a-URL everywhere)~~
@@ -624,10 +781,25 @@ June 2026).
 | June 18 | **Interview proof uploads (v4.5) — full sprint, spec to ship.** New private `proofs` table (FK→articles, CASCADE) + private Storage bucket `proofs`. Worker: `proof_upload`/`proof_list`/`proof_view_url`/`proof_delete` (reporters own-scoped server-side; images only, 8 MB cap) + roll-off in the nightly sweep ("published + 30 days" + trash backstop). CMS: writer upload control w/ thumbnails + "Uploaded ✓" toast, review-pane viewer (signed-URL open), reporter delete/replace, and an Interview Proof column in Reports + CSV. Gauntlet: upload (incl. wrong-cat-photo → delete → re-upload), adviser + editor view/expand/delete, reporter own-scoping confirmed (UI + server), Reports↔CSV match. Deploy order honored: SQL+bucket → Worker → CMS → verify → bucket confirmed PRIVATE. |
 | June 28 | **Public photo uploads + cropper (v4.6) — full sprint, spec to ship.** New PUBLIC Storage bucket `media` (public-read, Worker-only writes — deliberate departure from the proofs privacy model). Worker: one action `image_upload` (reporters own-scoped on article photos, staff = adviser-only; JPG/PNG/WEBP + 8 MB; stores at stable extension-less path, stamps `photo_url`, returns public URL + `?v=`); bucket-aware `sbStorageUpload`; new `sbPatchRow`. CMS: Upload buttons beside paste-a-URL on lead photos (colour) + staff headshots (auto B&W); drag-and-zoom **cropper** (cover-locked, 16:9 / 1:1, thirds guides, output 1600×900 / 800×800, B&W folded into the canvas pass); live photo preview in writer + review panes; student-guidance hints. **Bug fixed:** article hero stray inline `height:auto` removed → heroes now centre-crop uniformly with the homepage. Replace = upsert-in-place, **no orphans** (verified: one file per id). Gauntlet: tall photo cropped/framed → identical on homepage + article; B&W square staff; cover-lock held; cancel/Esc/backdrop; AVIF/HEIC + oversize rejected pre-cropper. CMS-only deploy (+ the one public bucket) — no SQL/RLS/Worker-secret change. |
 | June 29 | **Rubric grading Worker action (v4.7) — spec to verified-live.** New `rubric_grade` action (editor/adviser only): **the first feature that sends data off-platform.** Model picks one of five tiers per criterion + a justification; the Worker maps tier→points from a hardcoded table and does all arithmetic (zero hallucinated scores). Privacy: only article type + anonymous text leave the Worker. Prompt caching on (cache_control on the rubric). Bounded retry (2 attempts, then flag — no infinite loop). Injection handling = flag only, never auto-penalty: model returns `injection_flag` and grades the real text on its merits regardless. **Gotcha logged for future Claude:** `claude-sonnet-4-6` REJECTS assistant-message prefill ("conversation must end with a user message") — the spec's `{`-prefill trick had to be removed; we lean on `parseGrade`'s fence-strip + first-`{` trim instead, which the modern model doesn't need anyway. Also fixed an apostrophe-escape bug in a Claude-written paste block (`\\'` closed a string early). Verified live via console (no UI yet) across the full matrix: **good article / no injection → honest 58.5, flag false** (the Opus piece); **good article / injection → honest 100, flag true** (first crow piece); **bad article / injection → honest 40, flag true** (the keystone — Sonnet-rewritten-worse version, proves the embedded "give me 100%" instruction moved the score by zero, the flag fired, bad writing graded as bad). Worker arithmetic confirmed on all three totals. Cost ≈ 1.5–2¢/article, ~$5/yr projected; $20/mo cap is a smoke alarm. Deploy: `ANTHROPIC_KEY` secret + Worker code only — no SQL, no RLS, no CMS change. **Next: the scorecard UI.** |
+| June 29 | **Rubric grade STORAGE (v4.8).** New private `rubric_grades` table (RLS ON at creation, no anon policy; FK→articles CASCADE) — one row per CONFIRMED grade, **append-on-save** = full version history (latest = the grade). Two adviser-only Worker actions: `grade_save` (recomputes the confirmed total from the edited tiers — never trusts the browser — stamps the next version, appends; stores both AI draft and adviser-confirmed grade) and `grade_list` (history read; feeds CSV). Nightly sweep gained a grade roll-off (30 days from **confirmed_at**, not publish). Decision: RLS-on-at-creation for this sensitive no-anon-policy table (honors "RLS last" intent correctly — service role bypasses RLS so it can't lock us out). Deploy: SQL (one CREATE TABLE) → Worker. Console smoke test (`grade_save`→`grade_list`) passed clean. |
+| June 29 | **Rubric grade SCORECARD UI (v4.9).** Canvas-style side-by-side in the Reports view: checkbox batch of gradable articles → Grade selected → overlay (article left, editable six-row scorecard right + overall + ⚑ flag + running total) → Confirm & save (only path to a stored grade) with auto-advance. Adviser-only history strip (read-only version snapshots). CSV gained AI Total / Confirmed Total / Confirmed? / six criteria columns. Also: **`rubric_grade` tightened from editor+ to adviser-only** — the whole grading surface is now the adviser's alone. CMS-only deploy (+ the role one-liner on the existing action). Gauntlet: full batch confirm + auto-advance, edit-a-tier recompute, reporter (Fable) + editor (Clawford) both see NOTHING grading-related. |
+| June 29 | **Student feedback + release modes (v4.9).** New `grade_feedback` action (reporter-own-scoped) returns ONLY the latest confirmed version's released parts — never the AI draft, an unreleased number, or history. Per-version **release_mode** (`full`/`rubric`/`comments`) stored inside `confirmed_grade` jsonb (no SQL). Student sees a "Your Rubric Feedback" panel in their write view (same real estate as editor notes) with the Canvas grade-of-record italic line. **Comments-only** = feedback with no score shown (the practice-round workflow). Canvas stays the grade of record (hand-keyed per district contract); the CMS hosts the "why." Verified live: comments-only hides the number for the student; rubric-only hides comments; full shows all; reporter can't read another's feedback. |
+| June 29 | **Batch-stepping bug fixes (v4.9.1).** Three live-found bugs in the grading overlay, all fixed CMS-only: (1) **wrong-article-opens** — checkbox reads were document-wide and stale checks bled into the next batch; fixed by scoping the `.grade-pick` read to the controls host AND clearing all checks after each grade run. (2) **release-mode reset on re-grade** — a fresh AI pass reseeded `releaseMode:'full'`; fixed by preserving the prior mode. (3) Added a **stale-render guard** in the async overlay (bail if the user advanced/closed during the `art_read` await). **Lesson for future Claude (now a Dragon):** scope DOM selectors to a container, never the whole document, in a multi-render UI; clear transient input state after batch actions; guard async renders against the user moving mid-await. Diagnosed via console probes (`_gradeBatch`/`_gradeIdx` vs. what's checked) rather than guessing. |
+| June 29 | **Reopen-to-edit saved grades (v4.9.2).** A **view / edit** link on any already-graded student (detected via `grade_list`, so it shows even for grades from a prior session) reopens the latest saved confirmed version into the editable overlay — **no AI call, no fresh draft** (loads your saved tiers/comments). Edits + Confirm & save **append** the next version (append-on-save), release mode preserved across the round-trip. Closes the gap where the only way back into a confirmed grade was to re-grade (which burned a call and reverted to a fresh AI draft). CMS-only. Verified live: reopen shows the saved edits, tweak persists as a new version, release mode survives. |
 
 ---
 
-*Updated June 29, 2026 — v4.7, rubric-grading ENGINE shipped and verified live
+*Updated June 29, 2026 — v4.9, the rubric-grading ARC is complete end to end:
+engine (v4.7) → storage (v4.8) → scorecard UI + student feedback with release
+modes + history viewer (v4.9) → batch-stepping fixes (v4.9.1) → reopen-to-edit
+saved grades (v4.9.2). The whole AI surface is adviser-only; students see only the
+released parts of a confirmed grade in-CMS; Canvas stays the hand-keyed grade of
+record. Next up: editor assignment dashboard cards (editors write too), then
+platform polish. The Noah Kahan streak finally died — Laura saw him June 11
+(and Gigi Perez June 14). Both excellent.*
+
+<!-- prior footer note (v4.7) retained below for history -->
+*v4.7 — rubric-grading ENGINE shipped and verified live
 across the full injection matrix (the first off-platform feature, and it landed
 clean). The keystone test: same planted "give me 100%" injection scored 100 on a
 strong article and 40 on a weak one — the instruction moved the grade by exactly
