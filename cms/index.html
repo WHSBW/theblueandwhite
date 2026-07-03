@@ -1796,7 +1796,7 @@ async function loadTrash() {
         <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
         <div class="q-info">
           <div class="q-hed">${escHtml(a.headline || 'Untitled')}</div>
-          <div class="q-meta">${escHtml(a.headline || 'Untitled')} · ${a.section||'—'} · trashed ${formatDate(a.trashed_at)} · <span style="color:${urgency};font-weight:500;">auto-deletes in ${daysLeft} day${daysLeft===1?'':'s'}</span></div>
+          <div class="q-meta">${escHtml(a.author_name)} · ${a.section||'—'} · trashed ${formatDate(a.trashed_at)} · <span style="color:${urgency};font-weight:500;">auto-deletes in ${daysLeft} day${daysLeft===1?'':'s'}</span></div>
         </div>
         <div class="q-actions">
           <button class="btn btn-sm btn-success" onclick="restoreArticle('${a.id}','${safeHed}')">Restore</button>
@@ -1838,7 +1838,7 @@ async function loadAllArticles() {
       return `<div class="queue-item">
         <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
         <div class="q-info">
-          <div class="q-hed">${escHtml(a.author_name)}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id], extMap[a.id]))}${extStatusHTML(extMap[a.id])}</div>
+          <div class="q-hed"><div class="q-hed">${escHtml(a.headline || 'Untitled')}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id], extMap[a.id]))}${extStatusHTML(extMap[a.id])}</div>${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id], extMap[a.id]))}${extStatusHTML(extMap[a.id])}</div>
           <div class="q-meta">${escHtml(a.author_name)} · ${a.section||'—'} · ${formatDate(a.created_at)}${a.status==='published' && a.takedown_at ? ` · <span style=\"color:var(--warn);font-weight:500;\">comes down ${formatDate(a.takedown_at)}</span>` : ''}</div>
         </div>
         <span class="status-pill s-${a.status}">${a.status}</span>
