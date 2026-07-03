@@ -1838,7 +1838,7 @@ async function loadAllArticles() {
       return `<div class="queue-item">
         <div class="q-dot" style="background:${sectionColors[a.section]||'var(--silver)'}"></div>
         <div class="q-info">
-          <div class="q-hed"><div class="q-hed">${escHtml(a.headline || 'Untitled')}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id], extMap[a.id]))}${extStatusHTML(extMap[a.id])}</div>${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id], extMap[a.id]))}${extStatusHTML(extMap[a.id])}</div>
+          <div class="q-hed">${escHtml(a.headline || 'Untitled')}${lateBadgeHTML(lateInfoFor(a, dueMap[a.assignment_id], extMap[a.id]))}${extStatusHTML(extMap[a.id])}</div>
           <div class="q-meta">${escHtml(a.author_name)} · ${a.section||'—'} · ${formatDate(a.created_at)}${a.status==='published' && a.takedown_at ? ` · <span style=\"color:var(--warn);font-weight:500;\">comes down ${formatDate(a.takedown_at)}</span>` : ''}</div>
         </div>
         <span class="status-pill s-${a.status}">${a.status}</span>
