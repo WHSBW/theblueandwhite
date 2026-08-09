@@ -1134,7 +1134,7 @@ async function saveDraft() {
     const r = await workerCall({ action: 'art_save', id: currentArticleId || undefined, fields: payload });
     if (!currentArticleId) currentArticleId = r.id;
     showToast('write-toast', 'Draft saved.', 'success');
-  } catch(e) { showToast('write-toast', 'Save failed. Try again.', 'error'); }
+  } catch(e) { showToast('write-toast', e.message || 'Save failed. Try again.', 'error'); }
 }
 
 async function submitArticle() {
@@ -1161,7 +1161,7 @@ async function submitArticle() {
     if (!currentArticleId) currentArticleId = r.id;
     showToast('write-toast', 'Submitted for review! Your editor has been notified.', 'success');
     setTimeout(() => showView('rdash'), 2000);
-  } catch(e) { showToast('write-toast', 'Submit failed. Try again.', 'error'); }
+  } catch(e) { showToast('write-toast', e.message || 'Submit failed. Try again.', 'error'); }
 }
 
 function getArticlePayload(status) {
@@ -2329,7 +2329,15 @@ async function doAutosave() {
     if (!currentArticleId) currentArticleId = r.id;
     if (ind) { ind.textContent = 'Autosaved ✓'; setTimeout(function(){ if(ind) ind.textContent=''; }, 2500); }
   } catch(e) {
-    if (ind) ind.textContent = 'Save failed';
+    // v4.13: a closed newsroom is not a malfunction — say so plainly, and only
+    // toast once per closure so a student typing does not get spammed.
+    var closed = /newsroom is closed/i.test(e.message || '');
+    if (ind) ind.textContent = closed ? 'Newsroom closed' : 'Save failed';
+    if (closed && !window._closedToastShown) {
+      window._closedToastShown = true;
+      showToast('write-toast', e.message, 'error');
+    }
+    if (!closed) window._closedToastShown = false;
   }
 }
 
