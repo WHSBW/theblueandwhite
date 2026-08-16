@@ -2594,6 +2594,9 @@ const GRADE_POINTS = {
   mechanics: { exemplary:15, proficient:11, developing:7.5, beginning:3.5, absent:0 },
 };
 const GRADABLE_STATUSES = ['pending','returned','published']; // never raw drafts/trashed
+// Mirrors RUBRIC_MIN_WORDS in the Worker. Client-side it is PREVENTION only —
+// the Worker still refuses short articles on its own. If you change one, change both.
+const GRADE_MIN_WORDS = 50;
 
 // Per-report grading state.
 let _gradeArticles = {};   // id -> {name, status, section, type}
@@ -2601,6 +2604,16 @@ let _gradeBatch = [];      // ordered list of ids in the current review batch
 let _gradeDrafts = {};     // id -> { type, ai:{...}, working:{lead:{tier,justification},...,overall}, confirmed:bool }
 let _gradeIdx = 0;         // current index into _gradeBatch
 let _gradeListCache = null; // latest-version-per-article map for CSV (from grade_list)
+// The run status lives HERE, not only in the DOM. gradeRenderControls() rebuilds
+// the whole panel with innerHTML, which used to blow away the status div and
+// destroy the message that had just been written into it — that is why a
+// legitimate "too short to grade" refusal looked like nothing happening at all.
+let _gradeStatusHTML = '';
+function gradeSetStatus(html){
+  _gradeStatusHTML = html || '';
+  const el = document.getElementById('grade-run-status');
+  if (el) el.innerHTML = _gradeStatusHTML;
+}
 
 // Called by runReport after it stores _reportRows: stash gradable article meta
 // and (re)render the grading controls + checkboxes.
@@ -2613,6 +2626,7 @@ async function gradeSyncFromReport(matchedArticles){
         name: a.author_name || '(unknown)',
         status: a.status,
         section: a.section || 'News',
+        words: a.word_count || 0,
         type: (String(a.section||'').toLowerCase()==='editorial') ? 'editorial' : 'news',
       };
     }
@@ -2644,9 +2658,12 @@ function gradeRenderControls(){
     const a = _gradeArticles[id];
     const saved = _gradeSavedSet[String(id)];
     const done = (_gradeDrafts[id] && _gradeDrafts[id].confirmed) || !!saved;
-    h += '<label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer;">'+
-      '<input type="checkbox" class="grade-pick" value="'+_attr(id)+'">'+
+    const tooShort = (a.words || 0) < GRADE_MIN_WORDS;
+    h += '<label style="display:flex;align-items:center;gap:6px;font-size:14px;'+
+      (tooShort ? 'cursor:not-allowed;opacity:.55;' : 'cursor:pointer;')+'">'+
+      '<input type="checkbox" class="grade-pick" value="'+_attr(id)+'"'+(tooShort ? ' disabled' : '')+'>'+
       escHtml(a.name)+' <span style="color:#aaa;">('+escHtml(a.status)+')</span>'+
+      (tooShort ? ' <span style="color:#a15c00;">· '+(a.words||0)+' words, too short to grade</span>' : '')+
       (done ? ' <span style="color:#1a7f37;font-weight:600;">✓ graded</span>' : '')+
       (saved ? ' <a href="#" onclick="gradeOpenSaved(\''+_attr(id)+'\');return false;" style="font-size:12px;color:var(--navy);text-decoration:underline;">view / edit</a>' : '')+
       '</label>';
@@ -2656,35 +2673,54 @@ function gradeRenderControls(){
   if (_gradeBatch.length){
     h += '<button class="btn" onclick="gradeOpenOverlay(0)" style="margin-left:8px;">📝 Review grades ('+_gradeBatch.length+')</button>';
   }
-  h += '<div id="grade-run-status" style="font-size:13px;color:#777;margin-top:10px;"></div>';
+  h += '<div id="grade-run-status" style="font-size:13px;color:#777;margin-top:10px;">'+_gradeStatusHTML+'</div>';
   host.innerHTML = h;
 }
 
 // Fire the AI grade for every checked article.
+// ONE CALL PER ARTICLE, run in order, so the panel can report progress live and
+// name each failure next to the student it belongs to. The Worker accepts a list
+// and would loop server-side, but then the whole batch is a single silent wait.
 async function gradeRunSelected(){
   const host = document.getElementById('grade-controls');
-  const picks = host ? Array.from(host.querySelectorAll('.grade-pick')).filter(c=>c.checked).map(c=>c.value) : [];
-  const statusEl = document.getElementById('grade-run-status');
-  if (!picks.length){ if (statusEl) statusEl.textContent = 'Nothing selected.'; return; }
+  const picks = host ? Array.from(host.querySelectorAll('.grade-pick')).filter(c=>c.checked && !c.disabled).map(c=>c.value) : [];
+  if (!picks.length){ gradeSetStatus('Nothing selected.'); return; }
   const btn = document.getElementById('grade-run-btn');
-  if (btn){ btn.disabled = true; btn.textContent = 'Grading… (this calls the AI, ~2s each)'; }
-  if (statusEl) statusEl.textContent = 'Sending '+picks.length+' article'+(picks.length>1?'s':'')+' to the grader…';
+  if (btn){ btn.disabled = true; btn.textContent = 'Grading…'; }
 
-  let res;
-  try { res = await workerCall({ action:'rubric_grade', ids: picks }); }
-  catch(e){ res = { error: e.message }; }
-
-  if (btn){ btn.disabled = false; btn.textContent = '⚖ Grade selected'; }
-  if (!res || res.error){
-    if (statusEl) statusEl.textContent = 'Grading failed: ' + escHtml((res&&res.error)||'unknown error');
-    return;
+  // One line per article, updated in place as each call lands.
+  const lines = {};
+  picks.forEach(id=>{
+    lines[id] = { name: (_gradeArticles[id] ? _gradeArticles[id].name : id), state: 'waiting', detail: '' };
+  });
+  function paint(){
+    const parts = picks.map(id=>{
+      const L = lines[id];
+      let mark = '<span style="color:#aaa;">…</span>', colour = '#777';
+      if (L.state === 'running'){ mark = '<span style="color:#a15c00;">grading…</span>'; colour = '#333'; }
+      if (L.state === 'ok'){ mark = '<span style="color:#1a7f37;font-weight:600;">✓ graded</span>'; colour = '#333'; }
+      if (L.state === 'fail'){ mark = '<span style="color:#b3261e;font-weight:600;">✗ '+escHtml(L.detail||'failed')+'</span>'; colour = '#333'; }
+      return '<div style="color:'+colour+';padding:2px 0;">'+escHtml(L.name)+' — '+mark+'</div>';
+    });
+    gradeSetStatus(parts.join(''));
   }
+  paint();
 
-  // Seed working drafts from the AI results; collect successes into the batch.
   const newBatch = [];
-  const failed = [];
-  (res.results||[]).forEach(r=>{
-    if (r.ok && r.grade){
+  let okCount = 0, failCount = 0;
+
+  for (const id of picks){
+    lines[id].state = 'running'; paint();
+    let res;
+    try { res = await workerCall({ action:'rubric_grade', ids: [id] }); }
+    catch(e){ res = { error: e.message }; }
+
+    if (!res || res.error){
+      lines[id].state = 'fail'; lines[id].detail = (res && res.error) || 'unknown error';
+      failCount++; paint(); continue;
+    }
+    const r = (res.results || [])[0];
+    if (r && r.ok && r.grade){
       const working = {};
       GRADE_CRIT.forEach(c=>{
         const g = r.grade.criteria[c.key] || {};
@@ -2694,17 +2730,25 @@ async function gradeRunSelected(){
       const prevMode = (_gradeDrafts[r.id] && _gradeDrafts[r.id].releaseMode) || 'full';
       _gradeDrafts[r.id] = { type: r.type, ai: r.grade, working: working, confirmed: false, releaseMode: prevMode };
       newBatch.push(r.id);
+      lines[id].state = 'ok'; okCount++;
     } else {
-      failed.push((_gradeArticles[r.id] ? _gradeArticles[r.id].name : r.id) + ' — ' + (r.error||'failed'));
+      lines[id].state = 'fail';
+      lines[id].detail = (r && r.error) || 'the grader returned nothing readable';
+      failCount++;
     }
-  });
+    paint();
+  }
+
+  if (btn){ btn.disabled = false; btn.textContent = '⚖ Grade selected'; }
   _gradeBatch = newBatch;
   _gradeIdx = 0;
 
-  let msg = res.graded + ' graded';
-  if (res.failed) msg += ', ' + res.failed + ' need a retry';
-  if (failed.length) msg += ' (' + failed.map(escHtml).join('; ') + ')';
-  if (statusEl) statusEl.textContent = msg + '.';
+  // Summary line ON TOP of the per-article lines, so a failure stays on screen
+  // and readable after the run finishes.
+  const summary = '<div style="font-weight:600;color:#333;margin-bottom:4px;">'+
+    okCount+' graded'+(failCount ? ', '+failCount+' need a look' : '')+'.'+'</div>';
+  _gradeStatusHTML = summary + _gradeStatusHTML;
+
   gradeRenderControls();
   const hostC = document.getElementById('grade-controls');
   if (hostC) hostC.querySelectorAll('.grade-pick').forEach(c=>{ c.checked = false; });
@@ -2717,11 +2761,10 @@ async function gradeRunSelected(){
 // appends the next version (append-on-save).
 async function gradeOpenSaved(id){
   id = String(id);
-  const statusEl = document.getElementById('grade-run-status');
   let rows = [];
   try { const r = await workerCall({ action:'grade_list', article_id: id }); rows = r.rows || []; }
-  catch(e){ if (statusEl) statusEl.textContent = 'Could not load saved grade: ' + escHtml(e.message); return; }
-  if (!rows.length){ if (statusEl) statusEl.textContent = 'No saved grade found.'; return; }
+  catch(e){ gradeSetStatus('Could not load saved grade: ' + escHtml(e.message)); return; }
+  if (!rows.length){ gradeSetStatus('No saved grade found.'); return; }
   // latest version
   const g = rows.reduce((a,b)=> ((b.version||0) > (a.version||0) ? b : a), rows[0]);
   const cg = g.confirmed_grade || {};
@@ -2925,8 +2968,7 @@ async function gradeConfirmSave(){
   if (next === -1){ for (let i=0;i<_gradeBatch.length;i++){ if (!_gradeDrafts[_gradeBatch[i]].confirmed){ next=i; break; } } }
   if (next === -1){
     gradeCloseOverlay();
-    const statusEl = document.getElementById('grade-run-status');
-    if (statusEl) statusEl.textContent = 'All grades in this batch confirmed and saved. ✓';
+    gradeSetStatus('All grades in this batch confirmed and saved. ✓');
   } else {
     gradeOpenOverlay(next);
   }
